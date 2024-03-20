@@ -1,0 +1,145 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import embedding
+
+#based on Andrej Karpathy's YouTube lecture (minGPT)
+class Head(nn.Module):
+    def __init__(self, n_embd, head_size, decoder=False, block_size=30, dropout=0.1):
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias = False)
+        self.query = nn.Linear(n_embd, head_size, bias = False)
+        self.value = nn.Linear(n_embd, head_size, bias = False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+
+        self.dropout = nn.Dropout(dropout)
+        self.decoder = decoder
+
+    def forward(self,x):
+        B,T,C = x.shape
+        k = self.key(x)     #(B,T,hs)
+        q = self.query(x)   #(B,T,hs)
+
+        wei = q @ k.transpose(-2,-1) * k.shape[-1] ** -0.5  #(B,T,hs) @ (B,T,hs) -> (B,T,T)
+        if self.decoder:
+            wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) #(B,T,T)
+        wei = F.softmax(wei, dim=-1) #(B,T,T)
+        wei = self.dropout(wei)
+
+        v = self.value(x) #(B,T,hs)
+        out = wei @ v #(B,T,T) @ (B,T,hs) -> (B,T,hs)
+        return out
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, n_embd=64, num_heads=8, head_size=8, dropout=0.1,decoder=False,block_size=30):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(n_embd,head_size,decoder=decoder,
+                                         block_size=block_size,dropout=dropout) for _ in range(num_heads)])
+        self.proj = nn.Linear(head_size*num_heads, n_embd)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self,x):
+        out = torch.cat([h(x) for h in self.heads], dim = -1)
+        out = self.dropout(self.proj(out))
+        return out
+
+class FeedForward(nn.Module):
+    def __init__(self, n_embd,dropout=0.1,expansion=4):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, expansion*n_embd),
+            nn.ReLU(),
+            nn.Linear(expansion*n_embd, n_embd),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self,x):
+        return self.net(x)
+
+class TransformerBlock(nn.Module):
+    def __init__(self, n_embd=64, n_head=8,expansion=4,dropout=0.1,decoder=False,block_size=30):
+        super().__init__()
+        assert n_embd % n_head == 0, "wasting embedding dimension"
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_embd=n_embd, num_heads=n_head, head_size=head_size,dropout=dropout,decoder=decoder,block_size=block_size)
+        self.ffwd = FeedForward(n_embd,dropout=dropout,expansion=expansion)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
+    def forward(self,x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
+
+class Transformer(nn.Module):
+    def __init__(self,device='cpu',n_embd=64,n_head=8,n_layer=12,num_classes=10,expansion=4,dropout=0.1,decoder=False,block_size=30):
+        super().__init__()
+        self.device=device
+        self.position_embedding = None # TODO
+        self.blocks = nn.Sequential(*[TransformerBlock(n_embd=n_embd, n_head=n_head, expansion=expansion,
+                                                       dropout=dropout,decoder=decoder,block_size=block_size) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd)
+        self.lm_head = nn.Linear(n_embd, num_classes)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self,module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0,std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(self, x, targets = None):
+        B,T,C = x.shape
+
+        pos_embd = None #TODO
+
+        x = x #+ pos_embd
+        x = self.blocks(x) #(B,T,C)
+        x = self.ln_f(x) #(B,T,C)
+        logits = self.lm_head(x) #(B,T,num_classes)
+
+        if targets is None:
+            loss = None
+        else:
+            B,T,C = logits.shape
+            logits = logits.view(B*T,C)
+            targets = targets.view(B*T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+class ImageICLTransformer(torch.nn.Module):
+    def __init__(self, device='cpu',in_channels=1, num_classes=10, d_model=64, n_head=8, n_layer=12,
+                 expansion_factor=4,dropout=0.1,decoder=False,block_size=30,embed=None):
+        super(ImageICLTransformer, self).__init__()
+        self.device=device
+        self.d_model=d_model
+
+        self.transformer = Transformer(device=self.device,n_embd=d_model,n_head=n_head,n_layer=n_layer,num_classes=num_classes,
+                                       expansion=expansion_factor,dropout=dropout,decoder=decoder,block_size=block_size)
+        if embed is None:
+            c_per_g = [16,32,32,d_model]
+            self.embed = embedding.ResnetEmbedder(in_channels,channels_per_group=c_per_g)
+        else:
+            self.embed = embed
+
+        self.final_layer = nn.Linear(d_model,num_classes)
+
+    def forward(self, x, targets=None):
+        # x : tensor of shape B*T*(C*W*H), need to consolidate to one batch dimension for embedding
+        B,T,C,W,H = x.shape
+        out = x
+        out = out.reshape(B*T,C,W,H) #consolidate the token/batch dimensions
+        out = self.embed(out) #output of shape BT*d_model
+        out = out.reshape(B,T,self.d_model) #expand back
+        out, loss = self.transformer(out,targets=targets)
+        return out, loss
+
+    def __str__(self):
+        P = sum(p.numel() for p in self.parameters())
+        P_trans = sum(p.numel() for p in self.transformer.parameters())
+        P_embed = sum(p.numel() for p in self.embed.parameters())
+        return "Embedding Transformer with " + str(P) + " parameters, " + str(P_embed) + " parameters in embedder & " + str(P_trans) + " parameters in transformer"
