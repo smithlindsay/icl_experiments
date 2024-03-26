@@ -149,9 +149,9 @@ class ImageICLTransformer(torch.nn.Module):
         #interleave
         B,T,n_embd = out.shape
 
-        sequence = torch.empty(B,2*T,n_embd)
+        sequence = torch.empty(B,2*T-1,n_embd)
         sequence[:,0::2,:] = out
-        sequence[:,1::2,:] = label_embeddings
+        sequence[:,1::2,:] = label_embeddings[:,:T-1,:]
 
         out = self.transformer(sequence)
 
