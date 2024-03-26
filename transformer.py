@@ -101,7 +101,7 @@ class Transformer(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, x, targets = None):
+    def forward(self, x):
         B,T,C = x.shape
 
         pos_embd = self.position_embedding(torch.arange(0,T)) #TODO
@@ -111,19 +111,11 @@ class Transformer(nn.Module):
         x = self.ln_f(x) #(B,T,C)
         logits = self.lm_head(x) #(B,T,num_classes)
 
-        if targets is None:
-            loss = None
-        else:
-            B,T,C = logits.shape
-            logits = logits.view(B*T,C)
-            targets = targets.view(B*T)
-            loss = F.cross_entropy(logits, targets)
-
-        return logits, loss
+        return logits
 
 class ImageICLTransformer(torch.nn.Module):
     def __init__(self, device='cpu',in_channels=1, num_classes=10, d_model=64, n_head=8, n_layer=12,
-                 expansion_factor=4,dropout=0.1,decoder=False,block_size=30,embed=None):
+                 expansion_factor=4,dropout=0.1,decoder=False,block_size=30,img_embed=None):
         super(ImageICLTransformer, self).__init__()
         self.device=device
         self.d_model=d_model
@@ -132,21 +124,38 @@ class ImageICLTransformer(torch.nn.Module):
                                        expansion=expansion_factor,dropout=dropout,decoder=decoder,block_size=block_size)
         if embed is None:
             c_per_g = [16,32,32,d_model]
-            self.embed = embedding.ResnetEmbedder(in_channels,channels_per_group=c_per_g)
+            self.img_embed = embedding.ResnetEmbedder(in_channels,channels_per_group=c_per_g)
         else:
-            self.embed = embed
+            self.img_embed = embed
+
+        self.label_embed = nn.Linear(num_classes,n_embd)
 
         self.final_layer = nn.Linear(d_model,num_classes)
 
-    def forward(self, x, targets=None):
+    def forward(self, input_data):
         # x : tensor of shape B*T*(C*W*H), need to consolidate to one batch dimension for embedding
+        x,y = input_data
+
+        #embed images
         B,T,C,W,H = x.shape
         out = x
         out = out.reshape(B*T,C,W,H) #consolidate the token/batch dimensions
-        out = self.embed(out) #output of shape BT*d_model
+        out = self.img_embed(out) #output of shape BT*d_model
         out = out.reshape(B,T,self.d_model) #expand back
-        out, loss = self.transformer(out,targets=targets)
-        return out, loss
+
+        #embed labels
+        label_embeddings = self.label_embed(y)
+
+        #interleave
+        B,T,n_embd = out.shape
+
+        sequence = torch.empty(B,2*T,n_embd)
+        sequence[:,0::2,:] = out
+        sequence[:,1::2,:] = label_embeddings
+
+        out = self.transformer(sequence)
+
+        return out
 
     def __str__(self):
         P = sum(p.numel() for p in self.parameters())
