@@ -73,13 +73,14 @@ class TransformerBlock(nn.Module):
 
 class LearnableEmbedding(nn.Module):
     def __init__(self,num_embeddings, embedding_dim):
+        super().__init__()
         self.embd = nn.Embedding(num_embeddings, embedding_dim)
 
     def forward(self,x):
         return self.embd(x)
 
 class Transformer(nn.Module):
-    def __init__(self,device='cpu',n_embd=64,n_head=8,n_layer=12,num_classes=10,expansion=4,dropout=0.1,decoder=False,block_size=30,position_embedding=None):
+    def __init__(self,device='cuda',n_embd=64,n_head=8,n_layer=12,num_classes=10,expansion=4,dropout=0.1,decoder=False,block_size=30,position_embedding=None):
         super().__init__()
         self.device=device
         if position_embedding is None:
@@ -92,6 +93,7 @@ class Transformer(nn.Module):
         self.lm_head = nn.Linear(n_embd, num_classes)
 
         self.apply(self._init_weights)
+        self.device = device
 
     def _init_weights(self,module):
         if isinstance(module, nn.Linear):
@@ -104,7 +106,9 @@ class Transformer(nn.Module):
     def forward(self, x):
         B,T,C = x.shape
 
-        pos_embd = self.position_embedding(torch.arange(0,T)) #TODO
+        seq = torch.arange(0,T).to(self.device)
+
+        pos_embd = self.position_embedding(seq)
 
         x = x + pos_embd
         x = self.blocks(x) #(B,T,C)
@@ -114,7 +118,7 @@ class Transformer(nn.Module):
         return logits
 
 class ImageICLTransformer(torch.nn.Module):
-    def __init__(self, device='cpu',in_channels=1, num_classes=10, d_model=64, n_head=8, n_layer=12,
+    def __init__(self, device='cuda',in_channels=1, num_classes=10, d_model=64, n_head=8, n_layer=12,
                  expansion_factor=4,dropout=0.1,decoder=False,block_size=30,img_embed=None):
         super(ImageICLTransformer, self).__init__()
         self.device=device
@@ -122,15 +126,16 @@ class ImageICLTransformer(torch.nn.Module):
 
         self.transformer = Transformer(device=self.device,n_embd=d_model,n_head=n_head,n_layer=n_layer,num_classes=num_classes,
                                        expansion=expansion_factor,dropout=dropout,decoder=decoder,block_size=block_size)
-        if embed is None:
+        if img_embed is None:
             c_per_g = [16,32,32,d_model]
             self.img_embed = embedding.ResnetEmbedder(in_channels,channels_per_group=c_per_g)
         else:
-            self.img_embed = embed
+            self.img_embed = self.img_embed
 
-        self.label_embed = nn.Linear(num_classes,n_embd)
+        self.label_embed = nn.Embedding(num_classes,d_model)
 
         self.final_layer = nn.Linear(d_model,num_classes)
+        self.device = device
 
     def forward(self, input_data):
         # x : tensor of shape B*T*(C*W*H), need to consolidate to one batch dimension for embedding
@@ -149,7 +154,7 @@ class ImageICLTransformer(torch.nn.Module):
         #interleave
         B,T,n_embd = out.shape
 
-        sequence = torch.empty(B,2*T-1,n_embd)
+        sequence = torch.empty(B,2*T-1,n_embd).to(self.device)
         sequence[:,0::2,:] = out
         sequence[:,1::2,:] = label_embeddings[:,:T-1,:]
 
@@ -160,5 +165,6 @@ class ImageICLTransformer(torch.nn.Module):
     def __str__(self):
         P = sum(p.numel() for p in self.parameters())
         P_trans = sum(p.numel() for p in self.transformer.parameters())
-        P_embed = sum(p.numel() for p in self.embed.parameters())
+        P_embed = sum(p.numel() for p in self.img_embed.parameters())
         return "Embedding Transformer with " + str(P) + " parameters, " + str(P_embed) + " parameters in embedder & " + str(P_trans) + " parameters in transformer"
+
