@@ -71,11 +71,21 @@ class TransformerBlock(nn.Module):
         x = x + self.ffwd(self.ln2(x))
         return x
 
+class LearnableEmbedding(nn.Module):
+    def __init__(self,num_embeddings, embedding_dim):
+        self.embd = nn.Embedding(num_embeddings, embedding_dim)
+
+    def forward(self,x):
+        return self.embd(x)
+
 class Transformer(nn.Module):
-    def __init__(self,device='cpu',n_embd=64,n_head=8,n_layer=12,num_classes=10,expansion=4,dropout=0.1,decoder=False,block_size=30):
+    def __init__(self,device='cpu',n_embd=64,n_head=8,n_layer=12,num_classes=10,expansion=4,dropout=0.1,decoder=False,block_size=30,position_embedding=None):
         super().__init__()
         self.device=device
-        self.position_embedding = None # TODO
+        if position_embedding is None:
+            self.position_embedding = LearnableEmbedding(block_size, n_embd)
+        else:
+            self.position_embedding = position_embedding
         self.blocks = nn.Sequential(*[TransformerBlock(n_embd=n_embd, n_head=n_head, expansion=expansion,
                                                        dropout=dropout,decoder=decoder,block_size=block_size) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
@@ -94,9 +104,9 @@ class Transformer(nn.Module):
     def forward(self, x, targets = None):
         B,T,C = x.shape
 
-        pos_embd = None #TODO
+        pos_embd = self.position_embedding(torch.arange(0,T)) #TODO
 
-        x = x #+ pos_embd
+        x = x + pos_embd
         x = self.blocks(x) #(B,T,C)
         x = self.ln_f(x) #(B,T,C)
         logits = self.lm_head(x) #(B,T,num_classes)
