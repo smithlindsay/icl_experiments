@@ -11,23 +11,34 @@ class Head(nn.Module):
         self.query = nn.Linear(n_embd, head_size, bias = False)
         self.value = nn.Linear(n_embd, head_size, bias = False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
-
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = dropout
+        self.dropout_fn = nn.Dropout(dropout)
         self.decoder = decoder
+
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        if not self.flash:
+            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+            # causal mask to ensure that attention is only applied to the left in the input sequence
+            # self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                        # .view(1, 1, config.block_size, config.block_size))
 
     def forward(self,x):
         B,T,C = x.shape
         k = self.key(x)     #(B,T,hs)
         q = self.query(x)   #(B,T,hs)
+        v = self.value(x)   #(B,T,hs)
 
-        wei = q @ k.transpose(-2,-1) * k.shape[-1] ** -0.5  #(B,T,hs) @ (B,T,hs) -> (B,T,T)
-        if self.decoder:
-            wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) #(B,T,T)
-        wei = F.softmax(wei, dim=-1) #(B,T,T)
-        wei = self.dropout(wei)
+        if self.flash:
+            # efficient attention using Flash Attention CUDA kernels
+            out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout, is_causal=True)
+        else:
+            wei = q @ k.transpose(-2,-1) * k.shape[-1] ** -0.5  #(B,T,hs) @ (B,T,hs) -> (B,T,T)
+            if self.decoder:
+                wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) #(B,T,T)
+            wei = F.softmax(wei, dim=-1) #(B,T,T)
+            wei = self.dropout_fn(wei)
 
-        v = self.value(x) #(B,T,hs)
-        out = wei @ v #(B,T,T) @ (B,T,hs) -> (B,T,hs)
+            out = wei @ v #(B,T,T) @ (B,T,hs) -> (B,T,hs)
         return out
 
 class MultiHeadAttention(nn.Module):
@@ -136,6 +147,8 @@ class ImageICLTransformer(torch.nn.Module):
 
         self.final_layer = nn.Linear(d_model,num_classes)
         self.device = device
+        if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
+            print('using flash attention')
 
     def forward(self, input_data):
         # x : tensor of shape B*T*(C*W*H), need to consolidate to one batch dimension for embedding
