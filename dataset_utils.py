@@ -5,13 +5,6 @@ import torchvision.datasets as datasets
 import torch.nn as nn
 import torch.nn.functional as F
 
-import torch
-import numpy as np
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
-import torch.nn as nn
-import torch.nn.functional as F
-
 class RandomTasks:
     def __init__(self, base_dataset, num_tasks=32,num_classes=10):
         self.base_dataset = base_dataset
