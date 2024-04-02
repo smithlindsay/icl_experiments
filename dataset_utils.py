@@ -41,6 +41,7 @@ class AugmentedData(torch.utils.data.Dataset):
         t, p = other.get_transforms()
         self.transforms = t
         self.perms = p
+        print(self.nx)
 
     def __getitem__(self, index):
         base_idx = index % self.base_len
@@ -58,3 +59,29 @@ class AugmentedData(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.base_len*self.num_tasks
+    
+# generate the random matrix using a predetermined random seed (have an option go in order 0, 1, 2, 3...?, and another to just generate random seed), apply it to the batch of image data (to each element of batch separately), save the seed, return the transformed image data and the seed number (seed num is the task num)
+# takes in a batch of images, returns the transformed batch and the seed
+# this fn is used in the training loop
+def get_transformed_batch(images, labels, seed=None):
+    device = images.device
+    gen = torch.Generator()
+    if seed == None:
+        seed = gen.initial_seed()
+    else:
+        gen.manual_seed(seed)
+
+    # images.shape = torch.Size([batch, 1, 28, 28])
+    # labels.shape = torch.Size([batch])
+
+    nx = images.shape[-2] * images.shape[-1]
+
+    transform_mtx = torch.normal(0, 1/nx, size=(nx, nx), generator=gen).to(device)
+    # hardcoded to the 10 classes of mnist labels for now
+    perm = torch.randperm(10, generator=gen)
+
+    # matmul will broadcast the transform_mtx to each image in the batch
+    transform_images = torch.matmul(images.view(-1, nx), transform_mtx).view(images.shape).to(device)
+    perm_labels = labels[perm]
+
+    return transform_images, perm_labels, seed

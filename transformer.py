@@ -15,12 +15,7 @@ class Head(nn.Module):
         self.dropout_fn = nn.Dropout(dropout)
         self.decoder = decoder
 
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        if not self.flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            # self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        # .view(1, 1, config.block_size, config.block_size))
+        self.flash = hasattr(F, 'scaled_dot_product_attention')
 
     def forward(self,x):
         B,T,C = x.shape
@@ -30,7 +25,7 @@ class Head(nn.Module):
 
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout, is_causal=True)
+            out = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout, is_causal=True)
         else:
             wei = q @ k.transpose(-2,-1) * k.shape[-1] ** -0.5  #(B,T,hs) @ (B,T,hs) -> (B,T,T)
             if self.decoder:
@@ -147,7 +142,7 @@ class ImageICLTransformer(torch.nn.Module):
 
         self.final_layer = nn.Linear(d_model,num_classes)
         self.device = device
-        if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
+        if hasattr(F, 'scaled_dot_product_attention'):
             print('using flash attention')
 
     def forward(self, input_data):
