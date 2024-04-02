@@ -5,6 +5,63 @@ import torchvision.datasets as datasets
 import torch.nn as nn
 import torch.nn.functional as F
 
+import torch
+import numpy as np
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+import torch.nn as nn
+import torch.nn.functional as F
+
+class RandomTasks:
+    def __init__(self, base_dataset, num_tasks=32,num_classes=10):
+        self.base_dataset = base_dataset
+        self.num_tasks = num_tasks
+        self.image_shape = base_dataset[0][0].squeeze().shape
+        self.nx = self.image_shape[0] * self.image_shape[1]
+        self.C = num_classes
+        self.base_len = len(base_dataset)
+
+    def get_transforms(self, task_idx):
+        assert task_idx < self.num_tasks
+        gen = torch.Generator(device='cpu')
+        gen.manual_seed(task_idx)
+        a = torch.normal(0,1/self.nx, size=(self.nx,self.nx), generator=gen)
+        p = torch.randperm(self.C,generator=gen)
+        return a, p
+
+    def get_seq_from_task(self, task_idx, seq_len=100,add_channel=True):
+        transform, perm = self.get_transforms(task_idx)
+        data_idx = torch.randperm(self.base_len)[:seq_len]
+        images = []
+        targets = []
+        for i in data_idx:
+            image, target = self.base_dataset.__getitem__(i)
+            images.append(image)
+            targets.append(target)
+        images = torch.concat(images)
+        targets = torch.Tensor(targets).long()
+
+        targets = perm[targets]
+        images = images.view(-1, self.nx).squeeze()
+        transformed = images @ transform
+        output_shape = (seq_len,self.image_shape[0], self.image_shape[1])
+        img = transformed.view(output_shape)
+
+        if add_channel:
+            img = img.unsqueeze(1)
+
+        return img, targets
+
+    def get_batch(self, batch_size, seq_len=100, device='cuda',num_channels=1):
+        batch_img = torch.empty((batch_size, seq_len, num_channels, self.image_shape[0], self.image_shape[1]),device=device)
+        batch_targets = torch.empty((batch_size, seq_len),device=device)
+        for i in range(batch_size):
+            task_idx = np.random.randint(self.num_tasks)
+            img, target = self.get_seq_from_task(task_idx,seq_len=seq_len)
+            batch_img[i] = img
+            batch_targets[i] = target
+        return batch_img, batch_targets.long()
+
 class AugmentedData(torch.utils.data.Dataset):
     def __init__(self, base_dataset, num_tasks=32,num_classes=10,include_identity=False):
         self.base_dataset = base_dataset
