@@ -124,8 +124,7 @@ class Transformer(nn.Module):
         return logits
 
 class ImageICLTransformer(torch.nn.Module):
-    def __init__(self, device='cuda',in_channels=1, num_classes=10, d_model=64, n_head=8, n_layer=12,
-                 expansion_factor=4,dropout=0.1,decoder=False,block_size=30,img_embed=None):
+    def __init__(self, device='cuda',in_channels=1, num_classes=10, d_model=64, n_head=8, n_layer=12,expansion_factor=4,dropout=0.1,decoder=False, block_size=30,img_embed=None):
         super(ImageICLTransformer, self).__init__()
         self.device=device
         self.d_model=d_model
