@@ -100,7 +100,7 @@ def test_model(model, task_generator, batch_size=32, seq_len=50, num_batch=50, d
     correct = 0
     model.eval()
     for batch in tqdm(range(num_batch)):
-        images, labels = task_generator.get_batch(batch_size,seq_len=seq_len,device=device)
+        images, labels = task_generator.get_batch(batch_size)
         outputs = model((images,labels))
         pred = outputs[:,-1,:]
         loss = criterion(pred,labels[:,-1])
@@ -110,7 +110,7 @@ def test_model(model, task_generator, batch_size=32, seq_len=50, num_batch=50, d
     print(correct.item())
     print(accuracy)
 
-test_task_gen = dataset_utils.RandomTasks(test_data, num_tasks=n_tasks, seed_offset=n_tasks)
+test_task_gen = dataset_utils.RandomTasks(test_data, num_tasks=n_tasks, seq_len=seq_len, seed_offset=n_tasks)
 test_model(model, test_task_gen, batch_size=batch_size, num_batch=args.test_batches, seq_len=seq_len)
 
 
