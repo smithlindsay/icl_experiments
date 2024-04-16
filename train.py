@@ -107,11 +107,12 @@ def test_model(model, task_generator, batch_size=32, seq_len=50, num_batch=50, d
         _, predicted = torch.max(pred, 1)
         correct += (predicted == labels[:,-1]).sum()
     accuracy = 100 * (correct.item()) / (batch_size*num_batch)
-    print(correct.item())
     print(accuracy)
 
 test_task_gen = dataset_utils.RandomTasks(test_data, num_tasks=n_tasks, seq_len=seq_len, seed_offset=n_tasks)
 test_model(model, test_task_gen, batch_size=batch_size, num_batch=args.test_batches, seq_len=seq_len)
+
+torch.save(model.state_dict(), "final.th")
 
 
 
