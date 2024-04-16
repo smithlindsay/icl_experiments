@@ -6,54 +6,55 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class RandomTasks:
-    def __init__(self, base_dataset, num_tasks=32,num_classes=10):
+    def __init__(self, base_dataset, num_tasks=32,
+                 num_classes=10, seq_len=100, num_workers=2, device='cuda', seed_offset=0):
+        assert seq_len % 2 == 0
         self.base_dataset = base_dataset
         self.num_tasks = num_tasks
         self.image_shape = base_dataset[0][0].squeeze().shape
         self.nx = self.image_shape[0] * self.image_shape[1]
         self.C = num_classes
         self.base_len = len(base_dataset)
+        self.seq_len = seq_len
+        self.num_workers = num_workers
+        self.base_loader = torch.utils.data.DataLoader(base_dataset, batch_size=seq_len//2, 
+                                               shuffle=True, num_workers=self.num_workers, 
+                                               pin_memory=True)
+        self.device = device
+        self.seed_offset = seed_offset
 
     def get_transforms(self, task_idx):
         assert task_idx < self.num_tasks
         gen = torch.Generator(device='cpu')
-        gen.manual_seed(task_idx)
+        gen.manual_seed(self.seed_offset + task_idx)
         a = torch.normal(0,1/self.nx, size=(self.nx,self.nx), generator=gen)
         p = torch.randperm(self.C,generator=gen)
         return a, p
 
-    def get_seq_from_task(self, task_idx, seq_len=100,add_channel=True):
-        transform, perm = self.get_transforms(task_idx)
-        data_idx = torch.randperm(self.base_len)[:seq_len]
-        images = []
-        targets = []
-        for i in data_idx:
-            image, target = self.base_dataset.__getitem__(i)
-            images.append(image)
-            targets.append(target)
-        images = torch.concat(images)
-        targets = torch.Tensor(targets).long()
+    def get_seqs_from_task(self, task_idxs, batch_size, num_channels=1, seq_len=100):
+        batch_img = torch.empty((batch_size, seq_len//2, num_channels, 
+                                 self.image_shape[0], self.image_shape[1]),device='cpu')
+        batch_targets = torch.empty((batch_size, seq_len//2),device='cpu')
 
-        targets = perm[targets]
-        images = images.view(-1, self.nx).squeeze()
-        transformed = images @ transform
-        output_shape = (seq_len,self.image_shape[0], self.image_shape[1])
-        img = transformed.view(output_shape)
+        for i, (images, targets) in enumerate(self.base_loader):
+            if i >= batch_size:
+                break
+            transform, perm = self.get_transforms(int(task_idxs[i]))
+            targets = perm[targets]
+            images = images.view(-1, self.nx).squeeze()
+            transformed = images.matmul(transform)
+            output_shape = (seq_len//2,1,self.image_shape[0], self.image_shape[1])
+            img = transformed.view(output_shape)
 
-        if add_channel:
-            img = img.unsqueeze(1)
-
-        return img, targets
-
-    def get_batch(self, batch_size, seq_len=100, device='cuda',num_channels=1):
-        batch_img = torch.empty((batch_size, seq_len, num_channels, self.image_shape[0], self.image_shape[1]),device=device)
-        batch_targets = torch.empty((batch_size, seq_len),device=device)
-        for i in range(batch_size):
-            task_idx = np.random.randint(self.num_tasks)
-            img, target = self.get_seq_from_task(task_idx,seq_len=seq_len)
             batch_img[i] = img
-            batch_targets[i] = target
-        return batch_img, batch_targets.long()
+            batch_targets[i] = targets
+            
+        return batch_img.to(self.device), batch_targets.long().to(self.device)
+
+    def get_batch(self, batch_size,num_channels=1):
+        task_idxs = np.random.randint(self.num_tasks,size=(batch_size,))
+        
+        return self.get_seqs_from_task(task_idxs, batch_size, num_channels=num_channels,seq_len=self.seq_len)
 
 class AugmentedData(torch.utils.data.Dataset):
     def __init__(self, base_dataset, num_tasks=32,num_classes=10,include_identity=False):
