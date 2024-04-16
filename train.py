@@ -12,7 +12,7 @@ from tqdm import tqdm
 import torch.backends.cudnn as cudnn
 import argparse
 
-parser = argparse.ArgumentPArser(description="In-context learning on randomized MNIST")
+parser = argparse.ArgumentParser(description="In-context learning on randomized MNIST")
 parser.add_argument('-b', '--batch-size', default=32, type=int,
                     metavar='N', help='mini-batch size (default: 32)')
 parser.add_argument('--lr', '--learning-rate', default=3e-4, type=float,
