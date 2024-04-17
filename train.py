@@ -90,7 +90,7 @@ def test_model(model, test_loader, device='cuda'):
         loss = criterion(pred,labels[:,-1])
         _, predicted = torch.max(pred, 1)
         correct += (predicted == labels[:,-1]).sum()
-    accuracy = 100 * correct.item() / len(test_loader)
+    accuracy = 100 * correct.item() / (len(test_loader)*batch_size)
     print("\nTest Accuracy:", accuracy, "%")
 
 loss_history = [0]*len(loader)*epochs
@@ -110,7 +110,7 @@ for epoch in range(epochs):
 
     print("Test:")
 
-    test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, 
+    test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, batch_size=batch_size,
                                                seq_len=seq_len, batches_per_epoch=300, 
                                                num_workers=num_workers,dataset_expansion_factor=10, 
                                                seed_offset=n_tasks)
