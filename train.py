@@ -19,13 +19,18 @@ parser.add_argument('--lr', '--learning-rate', default=3e-4, type=float,
                     metavar='LR', help='learning rate (default: 3e-4)')
 parser.add_argument('--momentum', default=0.9, type=float,
                     metavar='M', help='momentum (default: 0.9)')
-parser.add_argument('-s', '--steps', default=50000, type=int,
-                    metavar='N', help='total steps to take (default: 50,000)')
+parser.add_argument('-e', '--epochs', default=50, type=int,
+                    metavar='N', help='total number of epochs (default: 50)')
+parser.add_argument('--batches-per-epoch', default=1000, type=int, metavar='N',
+                    help='number of batches/steps per epoch (test performance calculated after each epoch)')
 parser.add_argument('--device', default='cuda', type=str, help='device to run the training script on')
-parser.add_argument('--seq_len', '--sl', default=200, type=int, 
-                    help='number of tokens to send into the transformer (default: 200)')
+parser.add_argument('--seq_len', '--sl', default=100, type=int, 
+                    help='number of examples per sequence to send into the transformer (default: 100)')
 parser.add_argument('--n-tasks', '--num-tasks', default=16, type=int)
 parser.add_argument('--test-batches', default=50, type=int)
+parser.add_argument('--num-workers', default=8, type=int)
+parser.add_argument('--d-model', default=64, type=int)
+parser.add_argument('--n-layer', default=4, type=int)
 
 args = parser.parse_args()
 
@@ -43,74 +48,68 @@ test_data = datasets.MNIST('../data', train=False,
 batch_size = args.batch_size
 lr = args.lr
 momentum = args.momentum
-steps = args.steps
+epochs = args.epochs
+batches_per_epoch = args.batches_per_epoch
 device = args.device
 seq_len = args.seq_len
+num_workers = args.num_workers
+d_model = args.d_model
+n_layer = args.n_layer
 
 #augment MNIST with multiple tasks
 n_tasks = args.n_tasks
-task_gen = dataset_utils.RandomTasks(train_data, num_tasks=n_tasks, seq_len=seq_len)
+loader = dataset_utils.SequenceLoader(train_data, num_tasks=n_tasks, seq_len=seq_len, 
+                                      batches_per_epoch=batches_per_epoch,num_workers=num_workers,
+                                      dataset_expansion_factor=10)
 
-model = transformer.ImageICLTransformer(d_model=64,device=device,block_size=seq_len,n_layer=4)
+model = transformer.ImageICLTransformer(d_model=d_model,device=device,
+                                        block_size=seq_len*2,n_layer=n_layer)
 print(model)
 
 #train the model to do MNIST classification
-
 model = model.to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 criterion = torch.nn.CrossEntropyLoss()
-lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50])
+#lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50])
 
-loss_history = [0]*steps
-model.train()
-data_avg_t = 0
-loss_avg_t = 0
-for step in tqdm(range(steps)):
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    start.record()
-    images, labels = task_gen.get_batch(batch_size)
-    end.record()
-    torch.cuda.synchronize()
-    data_avg_t += start.elapsed_time(end)
-
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-
-    start.record()
-    optimizer.zero_grad()
-    outputs = model((images,labels))
-    pred = outputs[:,-1,:]
-    loss = criterion(pred,labels[:,-1])
-    loss.backward()
-    optimizer.step()
-    end.record()
-    torch.cuda.synchronize()
-    loss_avg_t += start.elapsed_time(end)
-    loss_history[step] = loss.item()
-
-loss_history = np.array(loss_history)
-plt.plot(loss_history)
-plt.savefig('loss_history.png')
-print("\nDATA: ", data_avg_t/steps)
-print("LOSS: ", loss_avg_t/steps)
-
-def test_model(model, task_generator, batch_size=32, seq_len=50, num_batch=50, device='cuda'):
+def test_model(model, test_loader, device='cuda'):
     correct = 0
     model.eval()
-    for batch in tqdm(range(num_batch)):
-        images, labels = task_generator.get_batch(batch_size)
+    for i, (images,labels) in enumerate(tqdm(test_loader)):
+        images, labels = images.to(device), labels.to(device)
         outputs = model((images,labels))
         pred = outputs[:,-1,:]
         loss = criterion(pred,labels[:,-1])
         _, predicted = torch.max(pred, 1)
         correct += (predicted == labels[:,-1]).sum()
-    accuracy = 100 * (correct.item()) / (batch_size*num_batch)
-    print(accuracy)
+    accuracy = 100 * (correct.item()) / (batch_size*len(test_loader))
+    print("\nTest Accuracy: ", accuracy, "%")
 
-test_task_gen = dataset_utils.RandomTasks(test_data, num_tasks=n_tasks, seq_len=seq_len, seed_offset=n_tasks)
-test_model(model, test_task_gen, batch_size=batch_size, num_batch=args.test_batches, seq_len=seq_len)
+loss_history = [0]*len(loader)*epochs
+for epoch in range(epochs):
+    print("Epoch: ", epoch)
+    model.train()
+    for step, (images, labels) in enumerate(tqdm(loader)):
+        images, labels = images.to(device), labels.to(device)
+        
+        optimizer.zero_grad()
+        outputs = model((images,labels))
+        pred = outputs[:,-1,:]
+        loss = criterion(pred,labels[:,-1])
+        loss.backward()
+        optimizer.step()
+        loss_history[step+len(loader)*epoch] = loss.item()
+
+    test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, 
+                                               seq_len=seq_len, batches_per_epoch=300, 
+                                               num_workers=8,dataset_expansion_factor=10, 
+                                               seed_offset=n_tasks)
+    test_model(model, test_loader, device=device)
+
+loss_history = np.array(loss_history)
+plt.plot(loss_history)
+plt.savefig('loss_history.png')
 
 torch.save(model.state_dict(), "final.th")
 

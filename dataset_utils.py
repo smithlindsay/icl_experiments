@@ -4,6 +4,105 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+
+class ExpandedDataset(Dataset):
+    def __init__(self, base_dataset, expansion_factor=4):
+        self.base_dataset = base_dataset
+        self.expansion_factor = expansion_factor
+
+    def __len__(self):
+        return self.base_dataset.__len__() * self.expansion_factor
+    
+    def __getitem__(self,idx):
+        base_idx = idx // self.expansion_factor
+        return self.base_dataset.__getitem__(base_idx)
+
+class SequenceLoader:
+    def __init__(self, base_dataset, num_tasks=32,num_classes=10, seq_len=100, num_workers=2, 
+                 batch_size=32, seed_offset=0, batches_per_epoch=100, device='cuda', 
+                 dataset_expansion_factor=4):
+        assert seq_len * batch_size <= len(base_dataset), "Batches bigger than dataset size are not supported"
+        self.base_dataset = ExpandedDataset(base_dataset, dataset_expansion_factor)
+        self.num_tasks = num_tasks
+        self.image_shape = base_dataset[0][0].squeeze().shape
+        self.nx = self.image_shape[0] * self.image_shape[1]
+        self.C = num_classes
+        self.base_len = len(base_dataset)
+        self.seq_len = seq_len
+        self.num_workers = num_workers
+        self.device = device
+        self.batch_size = batch_size
+        self.num_channels = 1
+        self.seed_offset = seed_offset
+        self.batches_per_epoch = batches_per_epoch
+        self.loader = self._get_loader()
+        self.iterator = iter(self.loader)
+        self.current_iteration = 0
+
+    def _get_transforms(self, task_idx):
+        assert task_idx < self.num_tasks
+        gen = torch.Generator(device='cpu')
+        gen.manual_seed(task_idx + self.seed_offset)
+        a = torch.normal(0,1/self.nx, size=(self.nx,self.nx), generator=gen)
+        p = torch.randperm(self.C,generator=gen)
+        return a, p
+
+    def _apply_transforms(self, img, target, task_idx):
+        transform, perm = self._get_transforms(task_idx)
+
+        target = perm[target]
+
+        img = img.view(-1, self.nx).squeeze()
+        transformed = img.matmul(transform)
+        output_shape = (self.seq_len,1,self.image_shape[0], self.image_shape[1])
+        img = transformed.view(output_shape)
+
+        return img, target.long()
+
+    def _collate(self, data):
+        batch_img = torch.empty((self.batch_size, self.seq_len, self.num_channels,
+                                 self.image_shape[0], self.image_shape[1]),device='cpu')
+        batch_targets = torch.empty((self.batch_size, self.seq_len),device='cpu')
+        for i in range(0,self.batch_size*(self.seq_len), self.seq_len):
+            seq = data[i:i+self.seq_len]
+            img_seq, target_seq = list(zip(*seq))
+            img_seq, target_seq = torch.concat(img_seq), torch.Tensor(target_seq).long()
+
+            task_idx = np.random.randint(self.num_tasks)
+            img, targets = self._apply_transforms(img_seq, target_seq, task_idx)
+            
+            batch_idx = i//self.seq_len 
+            batch_img[batch_idx] = img
+            batch_targets[batch_idx] = targets
+
+        return batch_img, batch_targets.long()
+
+    def _get_loader(self):
+        return DataLoader(self.base_dataset, 
+                          batch_size=self.batch_size*(self.seq_len),
+                          shuffle=True, num_workers=self.num_workers,
+                          pin_memory=True,collate_fn=self._collate, drop_last=True)
+        
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        if self.current_iteration >= self.batches_per_epoch:
+            self.current_iteration = 0
+            self.iterator = iter(self.loader)
+            raise StopIteration()
+        else:
+            self.current_iteration += 1
+        try:
+            data = next(self.iterator)
+        except StopIteration:
+            self.iterator = iter(self.loader)
+            data = next(self.iterator)
+        return data
+    
+    def __len__(self):
+        return self.batches_per_epoch
 
 class RandomTasks:
     def __init__(self, base_dataset, num_tasks=32,
