@@ -79,11 +79,12 @@ class SequenceLoader:
         return batch_img, batch_targets.long()
 
     def _get_loader(self):
+        persist = True if self.num_workers > 0 else False
         return DataLoader(self.base_dataset, 
                           batch_size=self.batch_size*(self.seq_len),
                           shuffle=True, num_workers=self.num_workers,
                           pin_memory=True,collate_fn=self._collate, 
-                          persistent_workers=True, drop_last=True)
+                          persistent_workers=persist, drop_last=True)
         
     def __iter__(self):
         return self
@@ -91,7 +92,7 @@ class SequenceLoader:
     def __next__(self):
         if self.current_iteration >= self.batches_per_epoch:
             self.current_iteration = 0
-            self.iterator = iter(self.loader)
+            #self.iterator = iter(self.loader)
             raise StopIteration()
         else:
             self.current_iteration += 1

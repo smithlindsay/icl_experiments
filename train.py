@@ -10,7 +10,6 @@ import transformer
 import dataset_utils
 import torch.backends.cudnn as cudnn
 import argparse
-from tqdm import tqdm 
 import time
 
 parser = argparse.ArgumentParser(description="In-context learning on randomized MNIST")
@@ -63,9 +62,12 @@ print("Running setup...")
 t1 = time.time()
 #augment MNIST with multiple tasks
 n_tasks = args.n_tasks
-loader = dataset_utils.SequenceLoader(train_data, num_tasks=n_tasks, seq_len=seq_len, 
-                                      batches_per_epoch=batches_per_epoch,num_workers=num_workers,
-                                      dataset_expansion_factor=10)
+seq_loader = dataset_utils.SequenceLoader(train_data, num_tasks=n_tasks, 
+                                          seq_len=seq_len, batch_size=batch_size, 
+                                          batches_per_epoch=batches_per_epoch,
+                                          num_workers=num_workers,
+                                          dataset_expansion_factor=2)
+loader = seq_loader._get_loader()
 t2 = time.time()
 print("Setup complete, time:", (t2-t1)/60, "minutes")
 
@@ -84,7 +86,7 @@ def test_model(model, test_loader, device='cuda', epochs=1, test_batch_size=64):
     correct = 0
     model.eval()
     for epoch in range(epochs):
-        for i, (images,labels) in enumerate(tqdm(test_loader)):
+        for i, (images,labels) in enumerate((test_loader)):
             images, labels = images.to(device), labels.to(device)
             outputs = model((images,labels))
             pred = outputs[:,-1,:]
@@ -98,7 +100,9 @@ loss_history = [0]*len(loader)*epochs
 for epoch in range(epochs):
     print("Epoch: ", epoch)
     model.train()
-    for step, (images, labels) in enumerate(tqdm(loader)):
+    print(len(loader))
+    t1 = time.time()
+    for step, (images, labels) in enumerate((loader)):
         images, labels = images.to(device), labels.to(device)
         
         optimizer.zero_grad()
@@ -109,13 +113,16 @@ for epoch in range(epochs):
         optimizer.step()
         loss_history[step+len(loader)*epoch] = loss.item()
 
-    print("Test:")
+    #print("Test:")
 
-    test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, batch_size=64,
-                                               seq_len=seq_len, batches_per_epoch=300, 
-                                               num_workers=num_workers,dataset_expansion_factor=10, 
-                                               seed_offset=n_tasks)
-    test_model(model, test_loader, device=device)
+    #test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, batch_size=64,
+                                               #seq_len=seq_len, batches_per_epoch=300, 
+                                               #num_workers=num_workers,dataset_expansion_factor=10, 
+                                               #seed_offset=n_tasks)
+    #test_model(model, test_loader, device=device)
+
+    t2 = time.time()
+    print("Epoch complete, time:", (t2-t1)/60, "minutes")
 
 loss_history = np.array(loss_history)
 plt.plot(loss_history)
