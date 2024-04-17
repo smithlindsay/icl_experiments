@@ -82,7 +82,8 @@ class SequenceLoader:
         return DataLoader(self.base_dataset, 
                           batch_size=self.batch_size*(self.seq_len),
                           shuffle=True, num_workers=self.num_workers,
-                          pin_memory=True,collate_fn=self._collate, drop_last=True)
+                          pin_memory=True,collate_fn=self._collate, 
+                          persistent_workers=True, drop_last=True)
         
     def __iter__(self):
         return self

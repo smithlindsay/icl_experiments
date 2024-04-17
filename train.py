@@ -5,12 +5,13 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torch.nn as nn
 import torch.nn.functional as F
-import embedding #these lines get underlined with an error but they work
+import embedding 
 import transformer
 import dataset_utils
-from tqdm import tqdm
 import torch.backends.cudnn as cudnn
 import argparse
+from tqdm import tqdm 
+import time
 
 parser = argparse.ArgumentParser(description="In-context learning on randomized MNIST")
 parser.add_argument('-b', '--batch-size', default=32, type=int,
@@ -56,11 +57,17 @@ num_workers = args.num_workers
 d_model = args.d_model
 n_layer = args.n_layer
 
+print(num_workers, " workers")
+
+print("Running setup...")
+t1 = time.time()
 #augment MNIST with multiple tasks
 n_tasks = args.n_tasks
 loader = dataset_utils.SequenceLoader(train_data, num_tasks=n_tasks, seq_len=seq_len, 
                                       batches_per_epoch=batches_per_epoch,num_workers=num_workers,
                                       dataset_expansion_factor=10)
+t2 = time.time()
+print("Setup complete, time:", (t2-t1)/60, "minutes")
 
 model = transformer.ImageICLTransformer(d_model=d_model,device=device,
                                         block_size=seq_len*2,n_layer=n_layer)
@@ -83,8 +90,8 @@ def test_model(model, test_loader, device='cuda'):
         loss = criterion(pred,labels[:,-1])
         _, predicted = torch.max(pred, 1)
         correct += (predicted == labels[:,-1]).sum()
-    accuracy = 100 * (correct.item()) / (batch_size*len(test_loader))
-    print("\nTest Accuracy: ", accuracy, "%")
+    accuracy = 100 * correct.item() / len(test_loader)
+    print("\nTest Accuracy:", accuracy, "%")
 
 loss_history = [0]*len(loader)*epochs
 for epoch in range(epochs):
@@ -101,9 +108,11 @@ for epoch in range(epochs):
         optimizer.step()
         loss_history[step+len(loader)*epoch] = loss.item()
 
+    print("Test:")
+
     test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, 
                                                seq_len=seq_len, batches_per_epoch=300, 
-                                               num_workers=8,dataset_expansion_factor=10, 
+                                               num_workers=num_workers,dataset_expansion_factor=10, 
                                                seed_offset=n_tasks)
     test_model(model, test_loader, device=device)
 
