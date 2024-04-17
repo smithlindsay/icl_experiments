@@ -22,7 +22,7 @@ class SequenceLoader:
     def __init__(self, base_dataset, num_tasks=32,num_classes=10, seq_len=100, num_workers=2, 
                  batch_size=32, seed_offset=0, batches_per_epoch=100, device='cuda', 
                  dataset_expansion_factor=4):
-        assert seq_len * batch_size <= len(base_dataset), "Batches bigger than dataset size are not supported"
+        assert seq_len * batch_size <= len(base_dataset) * dataset_expansion_factor, "Batches bigger than dataset size are not supported"
         self.base_dataset = ExpandedDataset(base_dataset, dataset_expansion_factor)
         self.num_tasks = num_tasks
         self.image_shape = base_dataset[0][0].squeeze().shape

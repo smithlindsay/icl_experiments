@@ -80,17 +80,18 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 criterion = torch.nn.CrossEntropyLoss()
 #lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50])
 
-def test_model(model, test_loader, device='cuda'):
+def test_model(model, test_loader, device='cuda', epochs=1, test_batch_size=64):
     correct = 0
     model.eval()
-    for i, (images,labels) in enumerate(tqdm(test_loader)):
-        images, labels = images.to(device), labels.to(device)
-        outputs = model((images,labels))
-        pred = outputs[:,-1,:]
-        loss = criterion(pred,labels[:,-1])
-        _, predicted = torch.max(pred, 1)
-        correct += (predicted == labels[:,-1]).sum()
-    accuracy = 100 * correct.item() / (len(test_loader)*batch_size)
+    for epoch in range(epochs):
+        for i, (images,labels) in enumerate(tqdm(test_loader)):
+            images, labels = images.to(device), labels.to(device)
+            outputs = model((images,labels))
+            pred = outputs[:,-1,:]
+            loss = criterion(pred,labels[:,-1])
+            _, predicted = torch.max(pred, 1)
+            correct += (predicted == labels[:,-1]).sum()
+    accuracy = 100 * correct.item() / (epochs*len(test_loader)*test_batch_size)
     print("\nTest Accuracy:", accuracy, "%")
 
 loss_history = [0]*len(loader)*epochs
@@ -110,7 +111,7 @@ for epoch in range(epochs):
 
     print("Test:")
 
-    test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, batch_size=batch_size,
+    test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, batch_size=64,
                                                seq_len=seq_len, batches_per_epoch=300, 
                                                num_workers=num_workers,dataset_expansion_factor=10, 
                                                seed_offset=n_tasks)
