@@ -194,9 +194,14 @@ class LinRegTransformer(torch.nn.Module):
             print('using flash attention')
 
     def forward(self, input_data):
-        # x : tensor of shape B*T*(C*W*H), need to consolidate to one batch dimension for embedding
+        #interleave
+        xs, ys = input_data
+        B,T,d = xs.shape
+        sequence = torch.empty(B,2*T-1,d).to(self.device)
+        sequence[:,0::2,:] = xs
+        sequence[:,1::2,:] = ys[:,:T-1,:]
 
-        #embed labels
+        #embed
         embeddings = self.embed(input_data)
         out = self.transformer(sequence)
 
