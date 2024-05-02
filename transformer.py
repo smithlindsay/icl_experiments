@@ -175,3 +175,29 @@ class ImageICLTransformer(torch.nn.Module):
         P_embed = sum(p.numel() for p in self.img_embed.parameters())
         return "Embedding Transformer with " + str(P) + " parameters, " + str(P_embed) + " parameters in embedder & " + str(P_trans) + " parameters in transformer"
 
+class LinRegTransformer(torch.nn.Module):
+    def __init__(self, device='cuda',in_channels=1, d_model=64, 
+                 n_head=8, n_layer=12,expansion_factor=4,dropout=0.1,
+                 decoder=False, block_size=30,input_dim=10):
+        super(LinRegTransformer, self).__init__()
+        self.device=device
+        self.d_model=d_model
+
+        self.transformer = Transformer(device=self.device,n_embd=d_model,n_head=n_head,n_layer=n_layer,num_classes=1,
+                                       expansion=expansion_factor,dropout=dropout,decoder=decoder,block_size=block_size)
+        
+        self.embed = nn.Linear(input_dim, d_model)
+
+        self.final_layer = nn.Linear(d_model,1)
+        self.device = device
+        if hasattr(F, 'scaled_dot_product_attention'):
+            print('using flash attention')
+
+    def forward(self, input_data):
+        # x : tensor of shape B*T*(C*W*H), need to consolidate to one batch dimension for embedding
+
+        #embed labels
+        embeddings = self.embed(input_data)
+        out = self.transformer(sequence)
+
+        return out
