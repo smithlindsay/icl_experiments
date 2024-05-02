@@ -196,13 +196,17 @@ class LinRegTransformer(torch.nn.Module):
     def forward(self, input_data):
         #interleave
         xs, ys = input_data
-        B,T,d = xs.shape
-        sequence = torch.empty(B,2*T-1,d).to(self.device)
+        B,t,d = xs.shape
+        T = 2*t-1
+        sequence = torch.empty(B,T,d).to(self.device)
         sequence[:,0::2,:] = xs
-        sequence[:,1::2,:] = ys[:,:T-1,:]
+        sequence[:,1::2,:] = ys[:,:t-1,:]
 
         #embed
-        embeddings = self.embed(input_data)
+        sequence = sequence.reshape((B*T,d))
+        sequence = self.embed(sequence)
+        sequence = sequence.reshape((B,T,self.d_model))
+
         out = self.transformer(sequence)
 
         return out

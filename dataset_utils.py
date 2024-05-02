@@ -240,7 +240,7 @@ def get_transformed_batch(images, labels, seed=None):
     return transform_images, perm_labels, seed
 
 def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1, ws=None, device='cuda'):
-    gen = torch.Generator()
+    gen = torch.Generator(device=device)
     gen.manual_seed(seed)
 
     xs = torch.randn(batch_size, n_samples, dim, generator=gen, device=device)
@@ -250,7 +250,8 @@ def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1, ws=None
     if ws is None:
         ws = torch.randn(batch_size, dim, generator=gen, device=device)
 
-    ys = torch.einsum('bsd,bd->bs',xs,ws).unsqueeze(2)
-    ys = torch.concat((ys, torch.zeros(batch_size,dim-1,n_samples)),dim=1)
+    ys = torch.einsum('bsd,bd->bs',xs,ws).unsqueeze(-1)
+    ys = torch.concat((ys, torch.zeros(batch_size,n_samples,dim-1,device=device)),dim=-1)
 
     return xs, ys, ws
+
