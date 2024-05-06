@@ -250,7 +250,8 @@ def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1, ws=None
 
     ys = torch.einsum('bsd,bd->bs',xs,ws).unsqueeze(-1)
     if noise_std is not None:
-        ys += noise_std*torch.randn(batch_size, generator=gen, device=device)
+        noise = torch.randn(batch_size, n_samples, generator=gen, device=device)
+        ys += noise_std*noise
     ys = torch.concat((ys, torch.zeros(batch_size,n_samples,dim-1,device=device)),dim=-1)
 
     return xs, ys, ws
