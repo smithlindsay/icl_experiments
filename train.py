@@ -11,6 +11,8 @@ import dataset_utils
 import torch.backends.cudnn as cudnn
 import argparse
 import time
+import contextlib
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description="In-context learning on randomized MNIST")
 parser.add_argument('-b', '--batch-size', default=32, type=int,
@@ -31,6 +33,7 @@ parser.add_argument('--test-batches', default=50, type=int)
 parser.add_argument('--num-workers', default=8, type=int)
 parser.add_argument('--d-model', default=64, type=int)
 parser.add_argument('--n-layer', default=4, type=int)
+parser.add_argument('--expansion', default=10, type=int)
 
 args = parser.parse_args()
 
@@ -55,6 +58,7 @@ seq_len = args.seq_len
 num_workers = args.num_workers
 d_model = args.d_model
 n_layer = args.n_layer
+expansion = args.expansion
 
 print(num_workers, " workers")
 
@@ -62,12 +66,11 @@ print("Running setup...")
 t1 = time.time()
 #augment MNIST with multiple tasks
 n_tasks = args.n_tasks
-seq_loader = dataset_utils.SequenceLoader(train_data, num_tasks=n_tasks, 
+loader = dataset_utils.SequenceLoader(train_data, num_tasks=n_tasks, 
                                           seq_len=seq_len, batch_size=batch_size, 
                                           batches_per_epoch=batches_per_epoch,
                                           num_workers=num_workers,
-                                          dataset_expansion_factor=2)
-loader = seq_loader._get_loader()
+                                          dataset_expansion_factor=expansion)
 t2 = time.time()
 print("Setup complete, time:", (t2-t1)/60, "minutes")
 
@@ -86,7 +89,7 @@ def test_model(model, test_loader, device='cuda', epochs=1, test_batch_size=64):
     correct = 0
     model.eval()
     for epoch in range(epochs):
-        for i, (images,labels) in enumerate((test_loader)):
+        for i, (images,labels) in enumerate(tqdm(test_loader)):
             images, labels = images.to(device), labels.to(device)
             outputs = model((images,labels))
             pred = outputs[:,-1,:]
@@ -97,32 +100,35 @@ def test_model(model, test_loader, device='cuda', epochs=1, test_batch_size=64):
     print("\nTest Accuracy:", accuracy, "%")
 
 loss_history = [0]*len(loader)*epochs
-for epoch in range(epochs):
-    print("Epoch: ", epoch)
-    model.train()
-    print(len(loader))
-    t1 = time.time()
-    for step, (images, labels) in enumerate((loader)):
-        images, labels = images.to(device), labels.to(device)
-        
-        optimizer.zero_grad()
-        outputs = model((images,labels))
-        pred = outputs[:,-1,:]
-        loss = criterion(pred,labels[:,-1])
-        loss.backward()
-        optimizer.step()
-        loss_history[step+len(loader)*epoch] = loss.item()
+print(len(loader))
+with open("err.log", "a") as err:
+    with contextlib.redirect_stderr(err):
+        for epoch in range(epochs):
+            print("Epoch: ", epoch)
+            model.train()
+            t1 = time.time()
+            for step, (images, labels) in enumerate(tqdm(loader)):
+                images, labels = images.to(device), labels.to(device)
+                
+                optimizer.zero_grad()
+                outputs = model((images,labels))
+                pred = outputs[:,-1,:]
+                loss = criterion(pred,labels[:,-1])
+                loss.backward()
+                optimizer.step()
+                loss_history[step+len(loader)*epoch] = loss.item()
 
-    #print("Test:")
+            print("Test:")
 
-    #test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, batch_size=64,
-                                               #seq_len=seq_len, batches_per_epoch=300, 
-                                               #num_workers=num_workers,dataset_expansion_factor=10, 
-                                               #seed_offset=n_tasks)
-    #test_model(model, test_loader, device=device)
+            test_loader = dataset_utils.SequenceLoader(test_data, num_tasks=n_tasks, batch_size=64,
+                                                       seq_len=seq_len, batches_per_epoch=300, 
+                                                       num_workers=num_workers,dataset_expansion_factor=expansion, 
+                                                       seed_offset=n_tasks)
+            test_model(model, test_loader, device=device)
 
-    t2 = time.time()
-    print("Epoch complete, time:", (t2-t1)/60, "minutes")
+            t2 = time.time()
+            print("Epoch complete, time:", (t2-t1)/60, "minutes")
+            torch.save(model.state_dict(), "checkpoints/checkpoint"+str(epoch)+".th")
 
 loss_history = np.array(loss_history)
 plt.plot(loss_history)
