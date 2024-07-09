@@ -254,7 +254,6 @@ def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1,
     if noise_std is not None:
         noise = torch.randn(batch_size, n_samples, 1, generator=gen, device=device)
         ys += noise_std*noise
-    ys = torch.concat((ys, torch.zeros(batch_size,n_samples,dim-1,device=device)),dim=-1)
 
     if sequence_transform is not None:
         assert dim2 > 0
@@ -262,6 +261,8 @@ def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1,
         for b in range(batch_size):
             xs2[b] = sequence_transform(b, xs[b], dim2=dim2)
         xs = xs2
+    concat_dim = dim if dim2 < 0 else dim2
+    ys = torch.concat((ys, torch.zeros(batch_size,n_samples,concat_dim-1,device=device)),dim=-1)
 
     return xs, ys, ws
 
