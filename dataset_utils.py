@@ -92,7 +92,7 @@ class SequenceLoader:
     def __next__(self):
         if self.current_iteration >= self.batches_per_epoch:
             self.current_iteration = 0
-            #self.iterator = iter(self.loader)
+            self.iterator = iter(self.loader)
             raise StopIteration()
         else:
             self.current_iteration += 1
