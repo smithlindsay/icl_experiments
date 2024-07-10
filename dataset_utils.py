@@ -255,3 +255,24 @@ def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1, ws=None
 
     return xs, ys, ws
 
+# make a logistic regression task for 2-class classification
+# posterior prob of class c1: p(c1|x) = sigmoid(w^T phi(x))
+# phi(x) is the feature vector of input x
+# prob_c1 = nn.Sigmoid(w.T @ phi)
+# try without feature vectors: just sigma(w^T x)
+def gen_logreg_data(seed, batch_size=64, dim=10, n_samples=50, mean=0, std=1, ws=None, device='cuda', noise_std=None):
+    gen = torch.Generator(device=device)
+    gen.manual_seed(seed)
+
+    xs = torch.randn(batch_size, n_samples, dim, generator=gen, device=device)
+
+    if ws is None:
+        ws = mean + std*torch.randn(batch_size, dim, 1, generator=gen, device=device)
+
+    ys = F.sigmoid(xs @ ws)
+
+    if noise_std is not None:
+        ys += noise_std*torch.randn(batch_size, generator=gen)
+    ys = torch.concat((ys, torch.zeros(batch_size,n_samples,dim-1,device=device)),dim=-1)
+
+    return xs, ys, ws
