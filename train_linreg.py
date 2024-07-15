@@ -16,6 +16,8 @@ import torch.optim as optim
 from torchvision import models
 import scipy.linalg as linalg
 import torch.autograd as autograd
+import inspect
+
 
 def FIM(model, device, data, b_stop=10):
     grad_idxs = np.array(list(range(0,99,2)))
@@ -48,14 +50,17 @@ def FIM(model, device, data, b_stop=10):
     return sigma ** 2
 
 #compute test loss on new w's
-def test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size, batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=50):
+def test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
+               batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=50,
+               ws=None):
     total_loss=0
     for b in range(test_batches):
         model.eval()
         xs, ys, ws = dataset_utils.gen_linreg_data(b+offset*batches_per_epoch*epoch,
                                                    batch_size=batch_size,dim=dim,
                                                    n_samples=seq_len,device=device,
-                                                   noise_std=noise_std)
+                                                   noise_std=noise_std,
+                                                   ws=ws)
 
         outputs = model((xs,ys))
         pred = outputs[:,grad_idxs].squeeze()
@@ -66,9 +71,34 @@ def test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size, batc
 
     return total_loss/test_batches
 
+def test_cone_falloff(model, device, grad_idxs, criterion, epoch, dim, batch_size,
+               batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=50,
+               start_angle=0, end_angle=360, strip_width=5):
+    angles = []
+    losses = []
+    for a in range(start_angle, end_angle, strip_width):
+        ws = dataset_utils.sample_cone(batch_size, dim, max_theta=a+strip_width, min_theta=a)
+        loss = test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
+               batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=50,
+               ws=None)
+        angles.append(a)
+        loss.append(loss)
+    return angles, losses
+
+def get_kwargs():
+    frame = inspect.currentframe().f_back
+    keys, _, _, values = inspect.getargvalues(frame)
+    kwargs = {}
+    for key in keys:
+        if key != 'self':
+            kwargs[key] = values[key]
+    return kwargs
+
 def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cuda',
           seq_len=50, num_workers=0, d_model=128, n_layer=10, dim=10, noise_std=1, outdir="outputs/", 
           switch_epoch=-1, pretrain_size=2**10, angle=360):
+
+    kwargs = get_kwargs()
 
     angle = angle * np.pi/180
 
@@ -165,3 +195,4 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
     ax1.set_xlabel('step')
 
     plt.savefig(outdir + 'loss_history_fisher.png')"""
+    return model, kwargs
