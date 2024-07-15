@@ -73,7 +73,7 @@ def test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
 
 def test_cone_falloff(model, device, grad_idxs, criterion, epoch, dim, batch_size,
                batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=50,
-               start_angle=0, end_angle=360, strip_width=5):
+               start_angle=0, end_angle=360, strip_width=5, **kwargs):
     angles = []
     losses = []
     for a in range(start_angle, end_angle, strip_width):
