@@ -267,7 +267,7 @@ def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1,
 
     return xs, ys, ws
 
-def sample_cone(n, d, max_theta, min_theta=0.0, r=1.0, gaussianize=True):
+def sample_cone(n, d, max_theta, min_theta=0.0, r=1.0, gaussianize=True, device='cuda'):
 
     def sample_sphere_(n, d, r=1.0):
         if type(r) is not np.ndarray:
@@ -295,6 +295,6 @@ def sample_cone(n, d, max_theta, min_theta=0.0, r=1.0, gaussianize=True):
         y_norm = np.sqrt(np.sum(y**2, axis=1))
         x = x * y_norm[:, None]
 
-    return x
+    return torch.tensor(x, device=device, dtype=torch.float32)
 
 

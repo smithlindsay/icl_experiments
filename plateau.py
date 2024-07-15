@@ -1,7 +1,7 @@
 import train_linreg
 
 
-angles = [60, 75, 90]
+angles = [15, 30]
 
 for angle in angles:
     print("##### angle = ", angle, " #####")

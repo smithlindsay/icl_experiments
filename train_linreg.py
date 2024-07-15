@@ -66,25 +66,11 @@ def test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size, batc
 
     return total_loss/test_batches
 
-def get_angle(v1, v2):
-    return (180/np.pi)*torch.acos(torch.dot(v1,v2)/torch.sqrt(torch.dot(v1,v1)*torch.dot(v2,v2)))
-
-def sample_ws_cone(angle, dim, batch_size, cone_center=None, device='cuda'):
-    if cone_center is None:
-        cone_center = torch.eye(dim, device=device)[0]
-    ws = torch.empty(batch_size, dim, device=device)
-    for b in range(batch_size):
-        candidate = torch.randn(dim, device=device)
-        while get_angle(candidate, cone_center) > angle:
-            candidate = torch.randn(dim, device=device)
-        #candidate = candidate/torch.sqrt(torch.dot(candidate, candidate))
-        ws[b] = candidate
-    return ws
-
-
 def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cuda',
           seq_len=50, num_workers=0, d_model=128, n_layer=10, dim=10, noise_std=1, outdir="outputs/", 
           switch_epoch=-1, pretrain_size=2**10, angle=360):
+
+    angle = angle * np.pi/180
 
     Path(outdir).mkdir(parents=True, exist_ok=True)
 
@@ -121,7 +107,7 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
         for b in range(batches_per_epoch):
             if epoch <= switch_epoch:
                 #batch_ws_idxs = np.random.permutation(pretrain_size)[:batch_size]
-                batch_ws = sample_ws_cone(angle, dim, batch_size, device=device)#ws[batch_ws_idxs]
+                batch_ws = dataset_utils.sample_cone(batch_size, dim, angle)#ws[batch_ws_idxs]
                 xs, ys, _ = dataset_utils.gen_linreg_data(b+batches_per_epoch*epoch,batch_size=batch_size,
                                                       dim=dim,n_samples=seq_len,device=device,noise_std=noise_std,
                                                       ws=batch_ws)
