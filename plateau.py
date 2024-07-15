@@ -1,9 +1,10 @@
 import train_linreg
 
 
-dims = [5,10,15,20,25]
+angles = [60, 75, 90]
 
-for dim in dims:
-    print("##### dim = ", dim, " #####")
-    train_linreg.train(dim=dim, epochs=250,outdir="output{0}/".format(dim))
+for angle in angles:
+    print("##### angle = ", angle, " #####")
+    train_linreg.train(dim=10, epochs=60,outdir="cone-angle{0}/".format(angle),switch_epoch=120, 
+                       pretrain_size=2**14, angle=angle)
     
