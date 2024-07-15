@@ -82,7 +82,7 @@ def test_cone_falloff(model, device, grad_idxs, criterion, epoch, dim, batch_siz
                batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=50,
                ws=None)
         angles.append(a)
-        loss.append(loss)
+        losses.append(loss)
     return angles, losses
 
 def get_kwargs():
