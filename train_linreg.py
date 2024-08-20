@@ -172,7 +172,6 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
             loss.backward()
             optimizer.step()
             loss_history[b+batches_per_epoch*(epoch-1)] = loss.item()
-            lr_scheduler.step()
         if (epoch - 1) % 3 == 0:
             torch.save(model.state_dict(),outdir + "checkpoint{0}.th".format(epoch))
         test_loss = test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
@@ -187,6 +186,7 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
             traces.append(eigs.sum())
             
 
+        lr_scheduler.step()
         t2 = time.time()
         print("Epoch complete, time:", (t2-t1)/60, "minutes, loss: {0}, test loss: {1}".format(loss.item(),test_loss))
 
