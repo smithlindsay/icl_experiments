@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.stats import beta
 from torch.utils.data import Dataset, DataLoader
+from torch.nn.functional import normalize
 
 class ExpandedDataset(Dataset):
     def __init__(self, base_dataset, expansion_factor=4):
@@ -242,7 +243,7 @@ def get_transformed_batch(images, labels, seed=None):
 
 def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1, 
                     ws=None, device='cuda',noise_std=None,
-                    sequence_transform=None, dim2=-1):
+                    sequence_transform=None, dim2=-1,norm=False):
     gen = torch.Generator(device=device)
     gen.manual_seed(seed)
 
@@ -250,6 +251,9 @@ def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1,
 
     if ws is None:
         ws = mean + std*torch.randn(batch_size, dim, generator=gen, device=device)
+
+    if norm:
+        ws = normalize(ws, dim=1)
 
     ys = torch.einsum('bsd,bd->bs',xs,ws).unsqueeze(-1)
     if noise_std is not None:
@@ -264,6 +268,7 @@ def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1,
         xs = xs2
     concat_dim = dim if dim2 < 0 else dim2
     ys = torch.concat((ys, torch.zeros(batch_size,n_samples,concat_dim-1,device=device)),dim=-1)
+
 
     return xs, ys, ws
 
