@@ -52,7 +52,7 @@ def FIM(model, device, data, b_stop=10):
 #compute test loss on new w's
 def test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
                batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=50,
-               ws=None):
+               ws=None,norm=False,lastonly=False):
     total_loss=0
     for b in range(test_batches):
         model.eval()
@@ -60,11 +60,14 @@ def test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
                                                    batch_size=batch_size,dim=dim,
                                                    n_samples=seq_len,device=device,
                                                    noise_std=noise_std,
-                                                   ws=ws)
+                                                   ws=ws,norm=norm)
 
         outputs = model((xs,ys))
         pred = outputs[:,grad_idxs].squeeze()
         true_ys = ys[:,:,0].squeeze()
+        if lastonly:
+            pred = pred[-1]
+            true_ys = true_ys[-1]
         loss = criterion(pred,true_ys)
 
         total_loss += loss.item()
@@ -73,15 +76,16 @@ def test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
 
 def test_cone_falloff(model, device, grad_idxs, criterion, epoch, dim, batch_size,
                batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=10,
-               start_angle=0, end_angle=180, strip_width=5, **kwargs):
+               start_angle=0, end_angle=180, strip_width=5, gaussianize=True, lastonly=False, **kwargs):
     angles = []
     losses = []
     for a in range(start_angle, end_angle, strip_width):
-        a *= np.pi/180
-        ws = dataset_utils.sample_cone(batch_size, dim, max_theta=a+strip_width, min_theta=a)
+        a_ = a * np.pi/180
+        ws = dataset_utils.sample_cone(batch_size, dim, max_theta=a_+strip_width, 
+                                       min_theta=a_, gaussianize=gaussianize)
         loss = test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
-               batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=50,
-               ws=ws)
+               batches_per_epoch, seq_len, noise_std, offset=offset,test_batches=test_batches,
+               ws=ws,lastonly=lastonly)
         angles.append(a)
         losses.append(loss)
     return angles, losses
@@ -101,12 +105,13 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
 
     kwargs = get_kwargs()
 
+    print("angle: ", angle)
+    angle_ = angle
     angle = angle * np.pi/180
 
     Path(outdir).mkdir(parents=True, exist_ok=True)
 
     print(num_workers, " workers")
-    print("angle: ", angle)
 
     model = transformer.LinRegTransformer(d_model=d_model,device=device,
                                             block_size=seq_len*2,n_layer=n_layer,input_dim=dim)
@@ -128,7 +133,7 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
     eigs_xs = []
     traces = []
 
-    ws = torch.randn(pretrain_size, dim, device=device)
+    ws = dataset_utils.sample_cone(pretrain_size, dim, angle, gaussianize=False) #torch.randn(pretrain_size, dim, device=device)
 
     for epoch in range(1,epochs+1):
         print("Epoch: ", epoch)
@@ -137,8 +142,19 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
         model.train()
         for b in range(batches_per_epoch):
             if epoch <= switch_epoch:
-                #batch_ws_idxs = np.random.permutation(pretrain_size)[:batch_size]
-                batch_ws = dataset_utils.sample_cone(batch_size, dim, angle)#ws[batch_ws_idxs]
+                if pretrain_size >= batch_size:
+                    batch_ws_idxs = np.random.permutation(pretrain_size)[:batch_size]
+                else:
+                    N = batch_size // pretrain_size
+                    batch_ws_idxs = np.random.permutation(pretrain_size)
+                    for i in range(N-1):
+                        addl = np.random.permutation(pretrain_size)
+                        batch_ws_idxs = np.concatenate((batch_ws_idxs,addl))
+                    remaining_size = batch_size % pretrain_size
+                    addl = np.random.permutation(pretrain_size)[:remaining_size]
+                    batch_ws_idxs = np.concatenate((batch_ws_idxs,addl))
+
+                batch_ws = ws[batch_ws_idxs] #dataset_utils.sample_cone(batch_size, dim, angle, gaussianize=False)
                 xs, ys, _ = dataset_utils.gen_linreg_data(b+batches_per_epoch*epoch,batch_size=batch_size,
                                                       dim=dim,n_samples=seq_len,device=device,noise_std=noise_std,
                                                       ws=batch_ws)
@@ -157,7 +173,8 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
         if (epoch - 1) % 3 == 0:
             torch.save(model.state_dict(),outdir + "checkpoint{0}.th".format(epoch))
         test_loss = test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
-                               batches_per_epoch, seq_len, noise_std, offset=1000*epoch)
+                               batches_per_epoch, seq_len, noise_std, offset=1000*epoch,
+                               norm=True)
         test_loss_history[epoch-1] = test_loss
         if False and (epoch - 1) % 3 == 0:
             eigs = FIM(model,'cuda',(xs,ys),b_stop=10)
@@ -197,8 +214,10 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
 
     plt.savefig(outdir + 'loss_history_fisher.png')"""
     angles, losses = test_cone_falloff(model, device, grad_idxs, criterion, epoch, dim, batch_size,
-               batches_per_epoch, seq_len, noise_std, offset=1000,test_batches=10,
-               start_angle=0, end_angle=180, strip_width=5)
+               batches_per_epoch, seq_len, noise_std, offset=10000,test_batches=350,
+               start_angle=0, end_angle=180, strip_width=5, gaussianize=False,lastonly=True)
     plt.figure()
     plt.plot(angles, losses)
+    np.save("anglestest_sphere_lastonly/angles{0}.npy".format(angle_), angles)
+    np.save("anglestest_sphere_lastonly/losses{0}.npy".format(angle_), losses)
     return model, kwargs
