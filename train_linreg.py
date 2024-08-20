@@ -101,7 +101,7 @@ def get_kwargs():
 
 def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cuda',
           seq_len=50, num_workers=0, d_model=128, n_layer=10, dim=10, noise_std=1, outdir="outputs/", 
-          switch_epoch=-1, pretrain_size=2**10, angle=180):
+          switch_epoch=-1, pretrain_size=2**10, angle=180, lr_milestones=[]):
 
     kwargs = get_kwargs()
 
@@ -124,6 +124,8 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     criterion = torch.nn.MSELoss()
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+                                                        milestones=lr_milestones)
     grad_idxs = np.array(list(range(0,99,2)))
 
     loss_history = [0]*batches_per_epoch*epochs
@@ -170,6 +172,7 @@ def train(batch_size=128, lr=3e-4, epochs=120, batches_per_epoch=100, device='cu
             loss.backward()
             optimizer.step()
             loss_history[b+batches_per_epoch*(epoch-1)] = loss.item()
+            lr_scheduler.step()
         if (epoch - 1) % 3 == 0:
             torch.save(model.state_dict(),outdir + "checkpoint{0}.th".format(epoch))
         test_loss = test_model(model, device, grad_idxs, criterion, epoch, dim, batch_size,
