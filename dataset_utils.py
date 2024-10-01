@@ -302,4 +302,47 @@ def sample_cone(n, d, max_theta, min_theta=0.0, r=1.0, gaussianize=True, device=
 
     return torch.tensor(x, device=device, dtype=torch.float32)
 
+def gen_twolayer_data(seed,batch_size=64,dim=3,n_samples=50,mean=0,std=1, 
+                    ws1=None, ws2=None, device='cuda',noise_std=None,
+                    sequence_transform=None, dim2=-1,norm=False):
+
+    gen = torch.Generator(device=device)
+    gen.manual_seed(seed)
+
+    xs = torch.randn(batch_size, n_samples, dim, generator=gen, device=device)
+
+    if ws1 is None:
+        ws1 = mean + std*torch.randn(batch_size, dim, generator=gen, device=device)
+
+    if ws2 is None:
+        ws2 = mean + std*torch.randn(batch_size, dim, dim, generator=gen, device=device)
+
+    if norm:
+        ws = torch.concatenate(ws1, ws2.flatten())
+        ws = normalize(ws)
+        ws1 = ws[:dim]
+        ws2 = ws[dim+1:]
+        ws2 = ws.reshape(dim,dim)
+
+    preact = torch.einsum('bsd,bdd->bsd',xs,ws1)
+    act = torch.nn.relu(preact)
+    ys = torch.einsum('bsd,bd->bs',xs,ws2).unsqueeze(-1)
+
+    if noise_std is not None:
+        noise = torch.randn(batch_size, n_samples, 1, generator=gen, device=device)
+        ys += noise_std*noise
+
+    if sequence_transform is not None:
+        assert dim2 > 0
+        xs2 = torch.empty(batch_size, n_samples, dim2, device=device)
+        for b in range(batch_size):
+            xs2[b] = sequence_transform(b, xs[b], dim2=dim2)
+        xs = xs2
+
+    concat_dim = dim if dim2 < 0 else dim2
+    ys = torch.concat((ys, torch.zeros(batch_size,n_samples,concat_dim-1,device=device)),dim=-1)
+
+
+    return xs, ys, ws
+
 
