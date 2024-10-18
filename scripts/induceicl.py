@@ -11,7 +11,7 @@ import transformer
 import dataset_utils
 from tqdm.auto import tqdm
 
-parser = argparse.ArgumentParser(description='Train a transformer model on 2 classes of MNIST for ICL')
+parser = argparse.ArgumentParser(description='take embeddings from trained model exhibiting ICL, put frozen emb on trained model not ICL')
 parser.add_argument('--task_exp', type=int, default=16, help='exp of 2**___: number of tasks to augment the dataset with')
 parser.add_argument('--batch_size', type=int, default=32, help='batch size')
 parser.add_argument('--seq_len', type=int, default=100, help='sequence length')
@@ -21,15 +21,15 @@ parser.add_argument('--run_name', type=str, default='')
 parser.add_argument('--datadir', type=str, default='/scratch/gpfs/ls1546/icl_experiments/data/')
 parser.add_argument('--path', type=str, default='/scratch/gpfs/ls1546/icl_experiments/', help='path to icl dir')
 parser.add_argument('--img_size', type=int, default=28, help='size of the MNIST image')
+parser.add_argument('--random_init_tr', type=str, default='', help='True = random init transformer, else empty str')
+parser.add_argument('--freeze', type=str, default='', help='emb = freeze embeddings, tr = freeze transformer, else empty str')
 args = parser.parse_args()
 
 task_exp = args.task_exp
 run_name = f'{args.run_name}is{args.img_size}t{task_exp}'
-# these will be the num of seeds we send into get_transformed_batch
-n_tasks = 2**task_exp
+n_tasks = 2**task_exp # these will be the num of seeds we send into get_transformed_batch
 batch_size = args.batch_size
-#this is what we previously called "batch_size"
-seq_len = args.seq_len
+seq_len = args.seq_len #this is what we previously called "batch_size"
 steps = args.train_steps
 lr = args.lr
 datadir = args.datadir
@@ -37,32 +37,14 @@ path = args.path
 figdir = f'{path}figures/'
 momentum = 0.9
 img_size = args.img_size
+freeze = args.freeze
+if args.random_init_tr == 'True':
+    random_init_tr = True
+else:
+    random_init_tr = False
 
-#load MNIST
-transform=transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-        ])
-train_data = datasets.MNIST('../data', train=True, download=True, transform=transform)
-test_data = datasets.MNIST('../data', train=False, transform=transform)
-
-# just train on 0s and 1s from mnist
-idx = (train_data.targets == 0) | (train_data.targets == 1)
-train_data.targets = train_data.targets[idx]
-train_data.data = train_data.data[idx]
-
-trainloader = torch.utils.data.DataLoader(train_data, batch_size=seq_len, shuffle=True)
-
-# just test on 0s and 1s from mnist
-idx = (test_data.targets == 0) | (test_data.targets == 1)
-test_data.targets = test_data.targets[idx]
-test_data.data = test_data.data[idx]
-
-testloader = torch.utils.data.DataLoader(test_data, batch_size=seq_len, shuffle=False)
-
+trainloader, testloader = dataset_utils.load_mnist_01(img_size, seq_len=seq_len)
 total_steps = int(np.ceil(steps/len(trainloader)))*len(trainloader)
-
 device = 'cuda'
 
 #instantiate model
@@ -71,13 +53,14 @@ device = 'cuda'
 model = transformer.ImageICLTransformer(d_model=64, n_layer=4, device='cuda', block_size=2*seq_len, num_classes=2)
 
 # test on unseen tasks to see if ICL occurs
-# once ICL occurs, freeze the embeddings, reset all other weights in model to random, and then retrain with frozen embeddings
-# test on unseen, the plateau in training should be gone
+
+# load a model that doesn't exhibit ICL, load a model that does exhibit ICL and put those embeddings on the model
+#  that doesn't exhibit ICL
+# freeze embeddings, train and then test on unseen, the plateau in training should be gone
 # plot test curve as well as train curve
 
-# load trained model
-model = torch.load(f"{datadir}{run_name}.pt")
-model = model.to(device)
+# load trained model w/ ICL
+model = torch.load(f"{datadir}gradnormis16t16.pt")
 
 for name, param in model.named_parameters():
     print(name, param)
@@ -89,19 +72,24 @@ label_embed_state_dict = model.label_embed.state_dict()
 # Reinitialize the model
 model = transformer.ImageICLTransformer(d_model=64, n_layer=4, device='cuda', block_size=2*seq_len, num_classes=2)
 
+if not random_init_tr:
+    # load the transformer from the model that doesn't exhibit ICL
+    model = torch.load(f"{datadir}gradnormis16t12.pt")
+
 # Load the saved embedding weights back into the model
 model.img_embed.load_state_dict(embed_state_dict)
 model.label_embed.load_state_dict(label_embed_state_dict)
 model = model.to(device)
 
-# freeze only the embeddings
-for name, param in model.img_embed.named_parameters():
-    param.requires_grad = False
-    print(name, param.requires_grad)
+if freeze == 'emb':
+    # freeze only the embeddings
+    for name, param in model.img_embed.named_parameters():
+        param.requires_grad = False
+        print(name, param.requires_grad)
 
-for name, param in model.label_embed.named_parameters():
-    param.requires_grad = False
-    print(name, param.requires_grad)
+    for name, param in model.label_embed.named_parameters():
+        param.requires_grad = False
+        print(name, param.requires_grad)
 
 # add the params back to optimizer
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=lr)
@@ -120,55 +108,20 @@ def checkpoint(model, epoch, optimizer, loss, run_name):
             'loss': loss,
             }, path)
 
-def make_seq(images, labels, device, n_tasks, task_list, batch_size):
-    # add batch dimension
-    images = torch.unsqueeze(images, 0).to(device)
-    labels = torch.unsqueeze(labels, 0).to(device)
-    # transform a batch, using a randomly selected task num from our list of n_tasks for each sequence in the batch, 
-    # concatenated along the batch dimension
-    temp_images, temp_labels, curr_seed = dataset_utils.get_transformed_batch(images, labels, seed=np.random.randint(n_tasks))
-    task_list.append(curr_seed)
-    for _ in range(1, batch_size):
-        temp2_images, temp2_labels, curr_seed = dataset_utils.get_transformed_batch(images, labels, seed=np.random.randint(n_tasks))
-        temp_images = torch.cat((temp_images, temp2_images), 0)
-        temp_labels = torch.cat((temp_labels, temp2_labels), 0)
-        task_list.append(curr_seed)
-
-    # images.shape = batch, seq, 1, 28, 28
-    # labels.shape = batch, seq
-    del temp2_images, temp2_labels
-    return temp_images, temp_labels
-
-def make_unseen_seq(images, labels, device, n_tasks, test_task_list, batch_size):
-    # add batch dimension
-    images = torch.unsqueeze(images, 0).to(device)
-    labels = torch.unsqueeze(labels, 0).to(device)
-    # shift the task num by n_tasks to get an unseen task
-    temp_images, temp_labels, curr_seed = dataset_utils.get_transformed_batch(images, labels, 
-                                                                              seed=np.random.randint(n_tasks)+n_tasks)
-    test_task_list.append(curr_seed)
-    for _ in range(1, batch_size):
-        temp2_images, temp2_labels, curr_seed = dataset_utils.get_transformed_batch(images, labels, 
-                                                                                    seed=np.random.randint(n_tasks)+n_tasks)
-        temp_images = torch.cat((temp_images, temp2_images), 0)
-        temp_labels = torch.cat((temp_labels, temp2_labels), 0)
-        test_task_list.append(curr_seed)
-
-    del temp2_images, temp2_labels
-    return temp_images, temp_labels
-
 losses = []
 testlosses = []
 testbatchlosses = []
 task_list = []
 test_task_list = []
+accuracies = []
 optimizer.zero_grad()
 epochs = int(np.ceil(total_steps/len(trainloader)))
+
 # training loop
 for epoch in (pbar := tqdm(range(1, epochs + 1))):
     model.train()
     for images, labels in trainloader:
-        temp_images, temp_labels = make_seq(images, labels, device, n_tasks, task_list, batch_size)
+        temp_images, temp_labels, task_list = dataset_utils.make_batch(images, labels, device, n_tasks, task_list, batch_size)
         outputs = model((temp_images,temp_labels))
         pred = outputs[:, 0::2, :]
         del outputs
@@ -190,7 +143,7 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
         testloss = 0
         num_batch = len(testloader)
         for images, labels in testloader:
-            temp_images, temp_labels = make_unseen_seq(images, labels, device, n_tasks, test_task_list, batch_size)
+            temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size)
             outputs = model((temp_images,temp_labels))
             pred = outputs[:,-1,:]
             batchloss = criterion(pred,temp_labels[:,-1])
@@ -199,6 +152,7 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
             testloss += batchloss.item()
             testbatchlosses.append(batchloss.item())
         accuracy = 100 * (correct.item()) / (batch_size*num_batch)
+        accuracies.append(accuracy)
         testloss /= len(testloader)
         testlosses.append(testloss)
 
@@ -211,14 +165,30 @@ losses = np.array(losses)
 np.save(f'{datadir}losses_{run_name}', losses)
 testlosses = np.array(testlosses)
 np.save(f'{datadir}testlosses_{run_name}', testlosses)
+accuracies = np.array(accuracies)
+np.save(f'{datadir}accuracies_{run_name}', accuracies)
 
 # make x values for number of steps per epoch to plot test loss at end of epoch on the same plot as train batch loss
 x = np.arange(len(trainloader), len(trainloader)*epochs+1, len(trainloader))
 
+title_str = ''
+if random_init_tr:
+    title_str = ', random init tr'
+else:
+    title_str = ', tr tasks:2**12'
+suptitle_str = ''
+if freeze == 'emb':
+    suptitle_str = ', froz emb'
+else:
+    suptitle_str = ', no freeze'
+
+
 plt.figure()
 plt.plot(losses, label='train')
 plt.plot(x, testlosses, zorder=5, label='test')
-plt.title(f'loss frozen embed - img size:({img_size}x{img_size}), tasks:2**{task_exp}')
+plt.plot(x, accuracies, zorder=10, label='test accuracy', color='black', ls='--')
+plt.title(f'loss - img size:({img_size}x{img_size}), emb tasks:2**16{title_str}')
+plt.suptitle(f'train/test on 2**{task_exp} tasks{suptitle_str}')
 plt.xlabel('batch')
 plt.ylabel('loss')
 plt.legend()

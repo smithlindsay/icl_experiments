@@ -1,17 +1,17 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 import sys
 from einops import rearrange
 import argparse
 sys.path.insert(1, '/scratch/gpfs/ls1546/icl_experiments/')
 import transformer
 import dataset_utils
+import plot_figs
 from tqdm.auto import tqdm
+import pickle
 
-parser = argparse.ArgumentParser(description='Train a transformer model on 2 classes of MNIST for ICL')
+parser = argparse.ArgumentParser(description='Train a transformer model on 3 classes of MNIST for ICL')
 parser.add_argument('--task_exp', type=int, default=16, help='exp of 2**___: number of tasks to augment the dataset with')
 parser.add_argument('--batch_size', type=int, default=32, help='batch size')
 parser.add_argument('--seq_len', type=int, default=100, help='sequence length')
@@ -21,6 +21,7 @@ parser.add_argument('--run_name', type=str, default='')
 parser.add_argument('--datadir', type=str, default='/scratch/gpfs/ls1546/icl_experiments/data/')
 parser.add_argument('--path', type=str, default='/scratch/gpfs/ls1546/icl_experiments/', help='path to icl dir')
 parser.add_argument('--img_size', type=int, default=28, help='size of the MNIST image')
+parser.add_argument('--num_classes', type=int, default=3, help='number of classes to train on')
 args = parser.parse_args()
 
 
@@ -36,15 +37,22 @@ path = args.path
 figdir = f'{path}figures/'
 momentum = 0.9
 img_size = args.img_size
+num_classes = args.num_classes
 
-trainloader, testloader = dataset_utils.load_mnist_01(img_size, seq_len=seq_len)
+if num_classes == 3:
+    trainloader, testloader = dataset_utils.load_mnist_3classes(img_size, seq_len=seq_len)
+elif num_classes == 5:
+    trainloader, testloader = dataset_utils.load_mnist_5classes(img_size, seq_len=seq_len)
+else:
+    trainloader, testloader = dataset_utils.load_mnist_01(img_size, seq_len=seq_len)
 total_steps = int(np.ceil(steps/len(trainloader)))*len(trainloader)
 device = 'cuda'
+
 
 #instantiate model
 # block size is the seq_len * 2 to account for image label interleaving
 # reduce num of classes from 10 to 2 for just 0s and 1s
-model = transformer.ImageICLTransformer(d_model=64, n_layer=4, device='cuda', block_size=2*seq_len, num_classes=2)
+model = transformer.ImageICLTransformer(d_model=64, n_layer=4, device='cuda', block_size=2*seq_len, num_classes=num_classes)
 
 #train the model to do MNIST classification
 
@@ -73,9 +81,9 @@ img_embed_grad_norm_list = []
 label_embed_grad_norms_list = []
 grad_norms_list = []
 total_grad_norms_list = []
+avg_batch_losses = []
 optimizer.zero_grad()
 epochs = int(np.ceil(total_steps/len(trainloader)))
-num_classes = 2
 
 # training loop
 for epoch in (pbar := tqdm(range(1, epochs + 1))):
@@ -86,8 +94,13 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
         pred = outputs[:, 0::2, :]
         del outputs
         # train by predicting on all tokens, not just the last one
-        pred = rearrange(pred, 'b h ... -> (b h) ...')
-        labels = rearrange(temp_labels, 'b c -> (b c)')
+        pred = rearrange(pred, 'b t ... -> (b t) ...')
+        labels = rearrange(temp_labels, 'b t -> (b t)')
+        crit = torch.nn.CrossEntropyLoss(reduction='none')
+        # save losses for each batch for loss vs. num examples
+        all_losses = rearrange(crit(pred, labels), "(b t) -> b t", b=batch_size).cpu().detach().numpy()
+        avg_batch_losses.append(np.mean(all_losses, axis=0))
+
         loss = criterion(pred, labels)
         loss.backward()
         optimizer.step()
@@ -185,60 +198,9 @@ np.save(f'{datadir}img_embed_grad_norms_{run_name}', img_embed_grad_norm_list)
 np.save(f'{datadir}label_embed_grad_norms_{run_name}', label_embed_grad_norms_list)
 np.save(f'{datadir}grad_norms_{run_name}', grad_norms_list)
 np.save(f'{datadir}total_grad_norms_{run_name}', total_grad_norms_list)
+# np.save(f'{datadir}avg_batch_losses_{run_name}', avg_batch_losses)
+# save avg_batch_losses as pickle
+with open(f'{datadir}avg_batch_losses_{run_name}.pkl', 'wb') as f:
+    pickle.dump(avg_batch_losses, f)
 
-# make x values for number of steps per epoch to plot test loss at end of epoch on the same plot as train batch loss
-# x = np.arange(len(trainloader), len(trainloader)*epochs+1, len(trainloader))
-steps_per_epoch = len(trainloader)
-x_initial = np.arange(1, steps_per_epoch+1)
-x_remaining = np.arange(steps_per_epoch*2, steps_per_epoch+1 + (len(accuracies) - steps_per_epoch)*steps_per_epoch, steps_per_epoch)
-x = np.concatenate((x_initial, x_remaining))
-
-plot_img_grad = []
-plot_label_grad = []
-plot_grad = []
-
-for i in range(len(img_embed_grad_norm_list)):
-    plot_img_grad.append(img_embed_grad_norm_list[i]/total_grad_norms_list[i])
-    plot_label_grad.append(label_embed_grad_norms_list[i]/total_grad_norms_list[i])
-    plot_grad.append(grad_norms_list[i]/total_grad_norms_list[i])
-
-plt.figure()
-fig, ax1 = plt.subplots(figsize=(10, 6))
-ax1.plot(losses, label='train')
-ax1.plot(x, testlosses, zorder=5, label='test')
-ax2 = ax1.twinx()
-ax2.plot(plot_img_grad, label='img embed grad norm fraction', color='red', alpha=0.5)
-ax2.plot(plot_label_grad, label='label embed grad norm fraction', color='green', alpha=0.5)
-ax2.plot(plot_grad, label='model grad norm (excluding embeds) fraction', color='purple', alpha=0.5)
-ax2.set_yscale('log')
-plt.title(f'loss - img size:({img_size}x{img_size}), tasks:2**{task_exp}')
-plt.xlabel('batch')
-plt.ylabel('loss')
-lines1, labels1 = ax1.get_legend_handles_labels()
-lines2, labels2 = ax2.get_legend_handles_labels()
-ax1.legend(lines1 + lines2, labels1 + labels2, bbox_to_anchor=(0.5, -0.1), loc='upper center', ncol=2)
-plt.tight_layout()
-plt.savefig(f'{figdir}loss{run_name}.pdf')
-
-plt.clf()
-plt.figure()
-fig, ax3 = plt.subplots(figsize=(10, 6))
-ax3.plot(losses, label='train')
-ax3.plot(x, testlosses, zorder=5, label='test')
-ax1_twin = ax3.twinx()
-color = 'tab:red'
-ax1_twin.plot(x, accuracies, label='test acc', color=color)
-ax1_twin.tick_params(axis='y', labelcolor=color)
-
-ax3.set_xlabel('batch')
-ax3.set_ylabel('loss')
-ax1_twin.set_ylabel('test accuracy', color=color)
-# set twin y axis scale to 0 - 100
-ax1_twin.set_ylim(0, 100)
-lines1, labels1 = ax3.get_legend_handles_labels()
-lines2, labels2 = ax1_twin.get_legend_handles_labels()
-
-
-ax3.legend(lines1 + lines2, labels1 + labels2, bbox_to_anchor=(0.5, -0.1), loc='upper center', ncol=2)
-plt.tight_layout()
-plt.savefig(f'{figdir}loss{run_name}_acc.pdf')
+plot_figs.plot_loss_acc(trainloader, losses, testlosses, accuracies, figdir, run_name)

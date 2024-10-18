@@ -210,3 +210,41 @@ class LinRegTransformer(torch.nn.Module):
         out = self.transformer(sequence)
 
         return out
+
+class LabelsTransformer(torch.nn.Module):
+    def __init__(self, device='cuda',in_channels=1, num_classes=10, d_model=64, n_head=8, n_layer=12,expansion_factor=4,dropout=0.1,decoder=False, block_size=30):
+        super().__init__()
+        self.device=device
+        self.d_model=d_model
+
+        self.transformer = Transformer(device=self.device,n_embd=d_model,n_head=n_head,n_layer=n_layer,num_classes=num_classes,
+                                       expansion=expansion_factor,dropout=dropout,decoder=decoder,block_size=block_size)
+
+        self.label_embed = nn.Embedding(num_classes,d_model)
+
+        self.final_layer = nn.Linear(d_model,num_classes)
+        self.device = device
+        if hasattr(F, 'scaled_dot_product_attention'):
+            print('using flash attention')
+
+    def forward(self, input_data):
+        # x : tensor of shape B*T*(C*W*H), need to consolidate to one batch dimension for embedding
+        # x,y = input_data
+        y = input_data
+        #embed labels
+        label_embeddings = self.label_embed(y)
+
+        B, T, n_embd = label_embeddings.shape # [B, T, n_embd]
+        
+        sequence = torch.empty(B,T-1,n_embd).to(self.device)
+        sequence = label_embeddings[:,:-1,:]
+        # chopping off the last label since we can't predict the one following it (we predict next label so want 0 thru T-1 as input)
+        out = self.transformer(sequence)
+
+        return out
+
+    def __str__(self):
+        P = sum(p.numel() for p in self.parameters())
+        P_trans = sum(p.numel() for p in self.transformer.parameters())
+        P_embed = sum(p.numel() for p in self.label_embed.parameters())
+        return "Embedding Transformer with " + str(P) + " parameters, " + str(P_embed) + " parameters in label embedder & " + str(P_trans) + " parameters in transformer"

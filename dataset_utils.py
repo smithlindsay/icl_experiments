@@ -210,34 +210,6 @@ class AugmentedData(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.base_len*self.num_tasks
-    
-# generate the random matrix using a predetermined random seed (have an option go in order 0, 1, 2, 3...?, and another to just generate random seed), apply it to the batch of image data (to each element of batch separately), save the seed, return the transformed image data and the seed number (seed num is the task num)
-# takes in a batch of images, returns the transformed batch and the seed
-# this fn is used in the training loop
-# class AugDataset():    
-
-def get_transformed_batch(images, labels, seed=None):
-    device = images.device
-    gen = torch.Generator()
-    if seed == None:
-        seed = gen.initial_seed()
-    else:
-        gen.manual_seed(seed)
-
-    # images.shape = torch.Size([batch, 1, 28, 28])
-    # labels.shape = torch.Size([batch])
-
-    nx = images.shape[-2] * images.shape[-1]
-
-    transform_mtx = torch.normal(0, 1/nx, size=(nx, nx), generator=gen).to(device)
-    
-    perm = torch.randperm(labels.shape[0], generator=gen)
-
-    # matmul will broadcast the transform_mtx to each image in the batch
-    transform_images = torch.matmul(images.view(-1, nx), transform_mtx).view(images.shape).to(device)
-    perm_labels = labels[perm]
-
-    return transform_images, perm_labels, seed
 
 def gen_linreg_data(seed,batch_size=64,dim=10,n_samples=50,mean=0,std=1, ws=None, device='cuda',noise_std=None):
     gen = torch.Generator(device=device)
@@ -276,3 +248,282 @@ def gen_logreg_data(seed, batch_size=64, dim=10, n_samples=50, mean=0, std=1, ws
     ys = torch.concat((ys, torch.zeros(batch_size,n_samples,dim-1,device=device)),dim=-1)
 
     return xs, ys, ws
+
+def get_transformed_seq(images, labels, num_classes, seed=None):
+    '''
+    Apply a random transformation to a sequence of images and randomly permute their labels. Can use a 
+    specific seed or a random seed. Used in the training loop to augment the dataset. The seed is the task number.
+
+    Args:
+        images: sequence of mnist images, shape (seq_len, 1, img_size, img_size).
+        labels: labels of the images, shape (seq_len).
+        num_classes: number of classes in the dataset
+        seed: random seed for the transformation, default is None.
+
+    Returns:
+        transform_images: torch tensor of shape (seq_len, 1, img_size, img_size) - seq of transformed images
+        perm_labels: torch tensor of shape (seq_len) - randomly permuted labels
+        seed: seed used for the transformation
+    '''
+    device = images.device
+    gen = torch.Generator()
+    if seed == None:
+        seed = gen.initial_seed()
+    else:
+        gen.manual_seed(seed)
+
+    nx = images.shape[-2] * images.shape[-1]
+
+    transform_mtx = torch.normal(0, 1/nx, size=(nx, nx), generator=gen).to(device)
+
+    # perm = torch.randperm(labels.shape[0], generator=gen) 
+    perm = torch.randperm(num_classes, generator=gen).to(device)
+
+    # matmul will broadcast the transform_mtx to each image in the seq
+    transform_images = torch.matmul(images.view(-1, nx), transform_mtx).view(images.shape).to(device)
+    
+    # perm_labels = labels[perm]
+    perm_labels = perm[labels]
+
+    return transform_images, perm_labels, seed
+
+def load_mnist(img_size, seq_len=100):
+    '''
+    Load mnist and create torch dataloader.
+
+    Args:
+        img_size: Size of the mnist image, default is 28. If img_size < 28, the image will be 
+        resized via transforms.Resize (interpolation).
+        seq_len: Length of each sequence in the dataloader (here, a sequence acts as a batch of images)
+
+    Returns:
+        trainloader: torch dataloader of training data
+        testloader: torch dataloader of test data
+    '''
+    #load MNIST
+    transform=transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+            ])
+    train_data = datasets.MNIST('../data', train=True, download=True, transform=transform)
+    test_data = datasets.MNIST('../data', train=False, download=True, transform=transform)
+
+    trainloader = torch.utils.data.DataLoader(train_data, batch_size=seq_len, shuffle=True, 
+                                              num_workers=8, pin_memory=True)
+
+    testloader = torch.utils.data.DataLoader(test_data, batch_size=seq_len, shuffle=False, 
+                                             num_workers=8, pin_memory=True)
+    return trainloader, testloader
+
+def load_mnist_01(img_size, seq_len=100, shuffled=False):
+    '''
+    Load just 1s and 0s from mnist and create torch dataloader.
+
+    Args:
+        img_size: Size of the mnist image, default is 28. If img_size < 28, the image will be 
+        resized via transforms.Resize (interpolation).
+        seq_len: Length of each sequence in the dataloader (here, a sequence acts as a batch of images)
+
+    Returns:
+        trainloader: torch dataloader of training data
+        testloader: torch dataloader of test data
+    '''
+    #load MNIST
+    transform=transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+            ])
+    train_data = datasets.MNIST('../data', train=True, download=True, transform=transform)
+    test_data = datasets.MNIST('../data', train=False, download=True, transform=transform)
+
+    # just train on 0s and 1s from mnist
+    idx = (train_data.targets == 0) | (train_data.targets == 1)
+    train_data.targets = train_data.targets[idx]
+    train_data.data = train_data.data[idx]
+
+    trainloader = torch.utils.data.DataLoader(train_data, batch_size=seq_len, shuffle=True, 
+                                              num_workers=8, pin_memory=True)
+
+    # just test on 0s and 1s from mnist
+    idx = (test_data.targets == 0) | (test_data.targets == 1)
+    test_data.targets = test_data.targets[idx]
+    test_data.data = test_data.data[idx]
+
+    testloader = torch.utils.data.DataLoader(test_data, batch_size=seq_len, shuffle=shuffled, 
+                                             num_workers=8, pin_memory=True)
+
+    print('shuffle=', shuffled)
+    return trainloader, testloader
+
+def make_batch(images, labels, device, n_tasks, task_list, batch_size, num_classes):
+    '''
+    Make a batch of batch_size num of sequences (that are length seq_len) that are transformed by get_transformed_seq.
+
+    Args:
+        images: sequence of mnist images, shape (seq_len, 1, img_size, img_size).
+        labels: labels of the images, shape (seq_len).
+        device: torch device ('cuda' or 'cpu')
+        n_tasks: number of tasks to augment the dataset with
+        task_list: list to append the seed of each task to
+        batch_size: number of sequences in the batch
+
+    Returns:
+        temp_images: torch tensor of shape (batch_size, seq_len, 1, img_size, img_size) of transformed images
+        temp_labels: torch tensor of shape (batch_size, seq_len) of randomly permuted labels
+        task_list: list of seeds used for each task
+    '''
+    # add batch dimension
+    images = torch.unsqueeze(images, 0).to(device)
+    labels = torch.unsqueeze(labels, 0).to(device)
+    # transform a batch, using a randomly selected task num from our list of n_tasks for each sequence in the batch, 
+    # concatenated along the batch dimension
+    temp_images, temp_labels, curr_seed = get_transformed_seq(images, labels, num_classes, seed=np.random.randint(n_tasks))
+    task_list.append(curr_seed)
+    for _ in range(1, batch_size):
+        temp2_images, temp2_labels, curr_seed = get_transformed_seq(images, labels, num_classes, seed=np.random.randint(n_tasks))
+        temp_images = torch.cat((temp_images, temp2_images), 0)
+        temp_labels = torch.cat((temp_labels, temp2_labels), 0)
+        task_list.append(curr_seed)
+
+    del temp2_images, temp2_labels
+    return temp_images, temp_labels, task_list
+
+def make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size, num_classes):
+    '''
+    Make a batch of batch_size num of sequences (that are length seq_len) that are transformed by get_transformed_seq using
+    tasks numbers (random seeds) that were not used in training. This is done by shifting the task num by n_tasks.
+
+    Args:
+        images: sequence of mnist images, shape (seq_len, 1, img_size, img_size).
+        labels: labels of the images, shape (seq_len).
+        device: torch device ('cuda' or 'cpu')
+        n_tasks: number of tasks to augment the dataset with
+        task_list: list to append the seed of each task to
+        batch_size: number of sequences in the batch
+
+    Returns:
+        temp_images: torch tensor of shape (batch_size, seq_len, 1, img_size, img_size) of transformed images
+        temp_labels: torch tensor of shape (batch_size, seq_len) of randomly permuted labels
+        test_task_list: list of seeds used for each task
+    '''
+    # add batch dimension
+    images = torch.unsqueeze(images, 0).to(device)
+    labels = torch.unsqueeze(labels, 0).to(device)
+    # shift the task num by n_tasks to get an unseen task
+    #ensure shift is by at least 2**20 to avoid overlap with training tasks
+    temp_images, temp_labels, curr_seed = get_transformed_seq(images, labels, num_classes, seed=np.random.randint(n_tasks)+2**20)
+    test_task_list.append(curr_seed)
+    for _ in range(1, batch_size):
+        temp2_images, temp2_labels, curr_seed = get_transformed_seq(images, labels, num_classes, seed=np.random.randint(n_tasks)+2**20)
+        temp_images = torch.cat((temp_images, temp2_images), 0)
+        temp_labels = torch.cat((temp_labels, temp2_labels), 0)
+        test_task_list.append(curr_seed)
+
+    del temp2_images, temp2_labels
+    return temp_images, temp_labels, test_task_list
+
+def load_mnist_even_odd(img_size, seq_len=100):
+    '''
+    Load data from mnist and separate into evens and odds and create torch dataloader.
+
+    Args:
+        img_size: Size of the mnist image, default is 28. If img_size < 28, the image will be 
+        resized via transforms.Resize (interpolation).
+        seq_len: Length of each sequence in the dataloader (here, a sequence acts as a batch of images)
+
+    Returns:
+        trainloader: torch dataloader of training data
+        testloader: torch dataloader of test data
+    '''
+    #load MNIST
+    transform=transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+            ])
+    train_data = datasets.MNIST('../data', train=True, download=True, transform=transform)
+    test_data = datasets.MNIST('../data', train=False, download=True, transform=transform)
+
+    # if the label is even, set it to 0, else set it to 1
+    train_data.targets = (train_data.targets % 2)
+    trainloader = torch.utils.data.DataLoader(train_data, batch_size=seq_len, shuffle=True, 
+                                              num_workers=8, pin_memory=True)
+
+    test_data.targets = (test_data.targets % 2)
+    testloader = torch.utils.data.DataLoader(test_data, batch_size=seq_len, shuffle=False, 
+                                             num_workers=8, pin_memory=True)
+    return trainloader, testloader
+
+def load_mnist_3classes(img_size, seq_len=100):
+    '''
+    Load just 0, 1, 2 from MNIST and create torch dataloader.
+
+    Args:
+        img_size: Size of the mnist image, default is 28. If img_size < 28, the image will be 
+        resized via transforms.Resize (interpolation).
+        seq_len: Length of each sequence in the dataloader (here, a sequence acts as a batch of images)
+
+    Returns:
+        trainloader: torch dataloader of training data
+        testloader: torch dataloader of test data
+    '''
+    #load MNIST
+    transform=transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+            ])
+    train_data = datasets.MNIST('../data', train=True, download=True, transform=transform)
+    test_data = datasets.MNIST('../data', train=False, download=True, transform=transform)
+
+    # only train and test on 0, 1, 2
+    idx = (train_data.targets == 0) | (train_data.targets == 1) | (train_data.targets == 2)
+    train_data.targets = train_data.targets[idx]
+    train_data.data = train_data.data[idx]
+    trainloader = torch.utils.data.DataLoader(train_data, batch_size=seq_len, shuffle=True, 
+                                              num_workers=8, pin_memory=True)
+
+    idx = (test_data.targets == 0) | (test_data.targets == 1) | (test_data.targets == 2)
+    test_data.targets = test_data.targets[idx]
+    test_data.data = test_data.data[idx]
+    testloader = torch.utils.data.DataLoader(test_data, batch_size=seq_len, shuffle=False, 
+                                             num_workers=8, pin_memory=True)
+    return trainloader, testloader
+
+def load_mnist_5classes(img_size, seq_len=100):
+    '''
+    Load just 0, 1, 2, 3, 4 from MNIST and create torch dataloader.
+
+    Args:
+        img_size: Size of the mnist image, default is 28. If img_size < 28, the image will be 
+        resized via transforms.Resize (interpolation).
+        seq_len: Length of each sequence in the dataloader (here, a sequence acts as a batch of images)
+
+    Returns:
+        trainloader: torch dataloader of training data
+        testloader: torch dataloader of test data
+    '''
+    #load MNIST
+    transform=transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+            ])
+    train_data = datasets.MNIST('../data', train=True, download=True, transform=transform)
+    test_data = datasets.MNIST('../data', train=False, download=True, transform=transform)
+
+    # only train and test on 0, 1, 2
+    idx = (train_data.targets == 0) | (train_data.targets == 1) | (train_data.targets == 2) | (train_data.targets == 3) | (train_data.targets == 4)
+    train_data.targets = train_data.targets[idx]
+    train_data.data = train_data.data[idx]
+    trainloader = torch.utils.data.DataLoader(train_data, batch_size=seq_len, shuffle=True, 
+                                              num_workers=8, pin_memory=True)
+
+    idx = (test_data.targets == 0) | (test_data.targets == 1) | (test_data.targets == 2) | (test_data.targets == 3) | (test_data.targets == 4)
+    test_data.targets = test_data.targets[idx]
+    test_data.data = test_data.data[idx]
+    testloader = torch.utils.data.DataLoader(test_data, batch_size=seq_len, shuffle=False, 
+                                             num_workers=8, pin_memory=True)
+    return trainloader, testloader

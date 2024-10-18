@@ -60,5 +60,5 @@ class ResnetEmbedder(nn.Module):
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layers(out)
         #average over superpixels to create embedding
-        out = torch.mean(out,axis=(2,3))
+        out = torch.mean(out,axis=(2,3)) #TODO: linear layer here?
         return out

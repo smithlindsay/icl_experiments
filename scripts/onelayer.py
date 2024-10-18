@@ -44,10 +44,9 @@ device = 'cuda'
 #instantiate model
 # block size is the seq_len * 2 to account for image label interleaving
 # reduce num of classes from 10 to 2 for just 0s and 1s
-model = transformer.ImageICLTransformer(d_model=64, n_layer=4, device='cuda', block_size=2*seq_len, num_classes=2)
+model = transformer.ImageICLTransformer(d_model=64, n_layer=1, device='cuda', block_size=2*seq_len, num_classes=2)
 
 #train the model to do MNIST classification
-
 model = model.to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -75,13 +74,12 @@ grad_norms_list = []
 total_grad_norms_list = []
 optimizer.zero_grad()
 epochs = int(np.ceil(total_steps/len(trainloader)))
-num_classes = 2
 
 # training loop
 for epoch in (pbar := tqdm(range(1, epochs + 1))):
     for images, labels in trainloader:
         model.train()
-        temp_images, temp_labels, task_list = dataset_utils.make_batch(images, labels, device, n_tasks, task_list, batch_size, num_classes)
+        temp_images, temp_labels, task_list = dataset_utils.make_batch(images, labels, device, n_tasks, task_list, batch_size)
         outputs = model((temp_images,temp_labels))
         pred = outputs[:, 0::2, :]
         del outputs
@@ -129,7 +127,7 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
                 for test_epoch in range(1, test_epochs + 1):
                     correct = 0
                     for images, labels in testloader:
-                        temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size, num_classes)
+                        temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size)
                         outputs = model((temp_images,temp_labels))
                         pred = outputs[:,-1,:]
                         batchloss = criterion(pred,temp_labels[:,-1])
@@ -156,7 +154,7 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
             for test_epoch in range(1, test_epochs + 1):
                 correct = 0
                 for images, labels in testloader:
-                    temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size, num_classes)
+                    temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size)
                     outputs = model((temp_images,temp_labels))
                     pred = outputs[:,-1,:]
                     batchloss = criterion(pred,temp_labels[:,-1])

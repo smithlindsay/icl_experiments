@@ -1,8 +1,6 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 import sys
 from einops import rearrange
 import argparse
@@ -11,7 +9,7 @@ import transformer
 import dataset_utils
 from tqdm.auto import tqdm
 
-parser = argparse.ArgumentParser(description='Train a transformer model on 2 classes of MNIST for ICL')
+parser = argparse.ArgumentParser(description='Train a transformer model on even/odd classification of MNIST for ICL')
 parser.add_argument('--task_exp', type=int, default=16, help='exp of 2**___: number of tasks to augment the dataset with')
 parser.add_argument('--batch_size', type=int, default=32, help='batch size')
 parser.add_argument('--seq_len', type=int, default=100, help='sequence length')
@@ -21,6 +19,7 @@ parser.add_argument('--run_name', type=str, default='')
 parser.add_argument('--datadir', type=str, default='/scratch/gpfs/ls1546/icl_experiments/data/')
 parser.add_argument('--path', type=str, default='/scratch/gpfs/ls1546/icl_experiments/', help='path to icl dir')
 parser.add_argument('--img_size', type=int, default=28, help='size of the MNIST image')
+parser.add_argument('--model_dim', type=int, default=64, help='dimension of the model')
 args = parser.parse_args()
 
 
@@ -36,15 +35,17 @@ path = args.path
 figdir = f'{path}figures/'
 momentum = 0.9
 img_size = args.img_size
+model_dim = args.model_dim
 
-trainloader, testloader = dataset_utils.load_mnist_01(img_size, seq_len=seq_len)
+# all 10 mnist classes, but do even/odd classification (binary)
+trainloader, testloader = dataset_utils.load_mnist_even_odd(img_size, seq_len=seq_len)
 total_steps = int(np.ceil(steps/len(trainloader)))*len(trainloader)
 device = 'cuda'
 
 #instantiate model
 # block size is the seq_len * 2 to account for image label interleaving
-# reduce num of classes from 10 to 2 for just 0s and 1s
-model = transformer.ImageICLTransformer(d_model=64, n_layer=4, device='cuda', block_size=2*seq_len, num_classes=2)
+# num of classes is 10 for mnist
+model = transformer.ImageICLTransformer(d_model=model_dim, n_layer=4, device='cuda', block_size=2*seq_len, num_classes=2)
 
 #train the model to do MNIST classification
 
@@ -54,34 +55,36 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 criterion = torch.nn.CrossEntropyLoss()
 lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50])
 
-def checkpoint(model, epoch, optimizer, loss, run_name):
+def checkpoint(model, epoch, optimizer, loss, losses, testlosses, accuracies, run_name):
     path = f"{datadir}ckpt{run_name}{epoch}.pt"
     torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'loss': loss,
+            'losses': losses,
+            'testlosses': testlosses,
+            'accuracies': accuracies
             }, path)
 
 losses = []
 testlosses = []
 testbatchlosses = []
+accuracies = []
 task_list = []
 test_task_list = []
-accuracies = []
 img_embed_grad_norm_list = []
 label_embed_grad_norms_list = []
 grad_norms_list = []
 total_grad_norms_list = []
 optimizer.zero_grad()
 epochs = int(np.ceil(total_steps/len(trainloader)))
-num_classes = 2
 
 # training loop
 for epoch in (pbar := tqdm(range(1, epochs + 1))):
+    model.train()
     for images, labels in trainloader:
-        model.train()
-        temp_images, temp_labels, task_list = dataset_utils.make_batch(images, labels, device, n_tasks, task_list, batch_size, num_classes)
+        temp_images, temp_labels, task_list = dataset_utils.make_batch(images, labels, device, n_tasks, task_list, batch_size)
         outputs = model((temp_images,temp_labels))
         pred = outputs[:, 0::2, :]
         del outputs
@@ -124,12 +127,12 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
             with torch.no_grad():
                 testloss = 0
                 num_batch = len(testloader)
-                test_epochs = 5
+                test_epochs = 1
                 accuracy = 0
                 for test_epoch in range(1, test_epochs + 1):
                     correct = 0
                     for images, labels in testloader:
-                        temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size, num_classes)
+                        temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size)
                         outputs = model((temp_images,temp_labels))
                         pred = outputs[:,-1,:]
                         batchloss = criterion(pred,temp_labels[:,-1])
@@ -144,19 +147,19 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
                 testlosses.append(testloss)
     # checkpoint every 10 epochs
     if epoch % 10 == 0:
-        checkpoint(model, epoch, optimizer, loss.item(), run_name)
+        checkpoint(model, epoch, optimizer, loss.item(), losses, testlosses, accuracies, run_name)
     # compute the test/val loss
     if epoch != 1:
         model.eval()
         with torch.no_grad():
             testloss = 0
             num_batch = len(testloader)
-            test_epochs = 5
+            test_epochs = 1
             accuracy = 0
             for test_epoch in range(1, test_epochs + 1):
                 correct = 0
                 for images, labels in testloader:
-                    temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size, num_classes)
+                    temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size)
                     outputs = model((temp_images,temp_labels))
                     pred = outputs[:,-1,:]
                     batchloss = criterion(pred,temp_labels[:,-1])
@@ -186,12 +189,8 @@ np.save(f'{datadir}label_embed_grad_norms_{run_name}', label_embed_grad_norms_li
 np.save(f'{datadir}grad_norms_{run_name}', grad_norms_list)
 np.save(f'{datadir}total_grad_norms_{run_name}', total_grad_norms_list)
 
-# make x values for number of steps per epoch to plot test loss at end of epoch on the same plot as train batch loss
-# x = np.arange(len(trainloader), len(trainloader)*epochs+1, len(trainloader))
-steps_per_epoch = len(trainloader)
-x_initial = np.arange(1, steps_per_epoch+1)
-x_remaining = np.arange(steps_per_epoch*2, steps_per_epoch+1 + (len(accuracies) - steps_per_epoch)*steps_per_epoch, steps_per_epoch)
-x = np.concatenate((x_initial, x_remaining))
+print(f'trainloader len: {len(trainloader)}')
+print(f'epochs: {epochs}')
 
 plot_img_grad = []
 plot_label_grad = []
@@ -202,10 +201,16 @@ for i in range(len(img_embed_grad_norm_list)):
     plot_label_grad.append(label_embed_grad_norms_list[i]/total_grad_norms_list[i])
     plot_grad.append(grad_norms_list[i]/total_grad_norms_list[i])
 
+steps_per_epoch = len(trainloader)
+
+x_remaining = np.arange(steps_per_epoch*2, steps_per_epoch+1 + (len(accuracies) - steps_per_epoch)*steps_per_epoch, steps_per_epoch)
+x_initial = np.arange(1, len(trainloader)+1)
+x_test = np.concatenate((x_initial, x_remaining))
+
 plt.figure()
 fig, ax1 = plt.subplots(figsize=(10, 6))
 ax1.plot(losses, label='train')
-ax1.plot(x, testlosses, zorder=5, label='test')
+ax1.plot(x_test, testlosses, zorder=5, label='test')
 ax2 = ax1.twinx()
 ax2.plot(plot_img_grad, label='img embed grad norm fraction', color='red', alpha=0.5)
 ax2.plot(plot_label_grad, label='label embed grad norm fraction', color='green', alpha=0.5)
@@ -224,10 +229,10 @@ plt.clf()
 plt.figure()
 fig, ax3 = plt.subplots(figsize=(10, 6))
 ax3.plot(losses, label='train')
-ax3.plot(x, testlosses, zorder=5, label='test')
+ax3.plot(x_test, testlosses, zorder=5, label='test')
 ax1_twin = ax3.twinx()
 color = 'tab:red'
-ax1_twin.plot(x, accuracies, label='test acc', color=color)
+ax1_twin.plot(x_test, accuracies, label='test acc', color=color)
 ax1_twin.tick_params(axis='y', labelcolor=color)
 
 ax3.set_xlabel('batch')
