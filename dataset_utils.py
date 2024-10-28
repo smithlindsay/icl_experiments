@@ -257,13 +257,13 @@ def get_transformed_seq(images, labels, num_classes, seed=None):
     Args:
         images: sequence of mnist images, shape (seq_len, 1, img_size, img_size).
         labels: labels of the images, shape (seq_len).
-        num_classes: number of classes in the dataset
+        num_classes: number of classes in the dataset.
         seed: random seed for the transformation, default is None.
 
     Returns:
-        transform_images: torch tensor of shape (seq_len, 1, img_size, img_size) - seq of transformed images
-        perm_labels: torch tensor of shape (seq_len) - randomly permuted labels
-        seed: seed used for the transformation
+        transform_images: torch tensor of shape (seq_len, 1, img_size, img_size) - seq of transformed images.
+        perm_labels: torch tensor of shape (seq_len) - randomly permuted labels.
+        seed: seed used for the transformation.
     '''
     device = images.device
     gen = torch.Generator()
@@ -276,14 +276,26 @@ def get_transformed_seq(images, labels, num_classes, seed=None):
 
     transform_mtx = torch.normal(0, 1/nx, size=(nx, nx), generator=gen).to(device)
 
-    # perm = torch.randperm(labels.shape[0], generator=gen) 
-    perm = torch.randperm(num_classes, generator=gen).to(device)
+    # bug: random labels
+    # perm = torch.randperm(labels.shape[0], generator=gen)
+    # perm_labels = labels[perm]
+
+    # print('labels shape', labels.shape)
+    # print('labels.shape[0]', labels.shape[0])
+    # print('perm', perm)
+
+    # correct: permuted classes
+    # perm = torch.randperm(num_classes, generator=gen).to(device)
+    # perm_labels = perm[labels]
+
+    # print('perm', perm)
+    # print('perm_labels', perm_labels)
+
+    # test for sequence length 1 with true labels
+    perm_labels = labels
 
     # matmul will broadcast the transform_mtx to each image in the seq
     transform_images = torch.matmul(images.view(-1, nx), transform_mtx).view(images.shape).to(device)
-    
-    # perm_labels = labels[perm]
-    perm_labels = perm[labels]
 
     return transform_images, perm_labels, seed
 
@@ -387,7 +399,7 @@ def make_batch(images, labels, device, n_tasks, task_list, batch_size, num_class
         temp_labels = torch.cat((temp_labels, temp2_labels), 0)
         task_list.append(curr_seed)
 
-    del temp2_images, temp2_labels
+        del temp2_images, temp2_labels
     return temp_images, temp_labels, task_list
 
 def make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size, num_classes):
@@ -421,7 +433,7 @@ def make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_siz
         temp_labels = torch.cat((temp_labels, temp2_labels), 0)
         test_task_list.append(curr_seed)
 
-    del temp2_images, temp2_labels
+        del temp2_images, temp2_labels
     return temp_images, temp_labels, test_task_list
 
 def load_mnist_even_odd(img_size, seq_len=100):
