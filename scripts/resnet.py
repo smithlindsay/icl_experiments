@@ -3,11 +3,11 @@ import torch.nn.functional as F
 import torch
 import numpy as np
 import sys
-from einops import rearrange
-import argparse
 sys.path.insert(1, '/scratch/gpfs/ls1546/icl_experiments/')
 import dataset_utils
 from tqdm.auto import tqdm
+import plot_figs
+from einops import rearrange
 
 class BasicBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
@@ -73,7 +73,7 @@ class Resnet(nn.Module):
     
 task_exp = 16
 n_tasks = 2**task_exp # these will be the num of seeds we send into get_transformed_batch
-batch_size = 32
+batch_size = 1000
 seq_len = 1 #this is what we previously called "batch_size"
 steps = 15000
 lr = 3e-4
@@ -88,7 +88,7 @@ c_per_g = [16,32,32,d_model]
 resnet = Resnet(1, channels_per_group=c_per_g)
 # will output (batch_size, d_model)
 
-trainloader, testloader = dataset_utils.load_mnist_01(img_size, seq_len=seq_len)
+trainloader, testloader = dataset_utils.load_mnist_01(img_size, seq_len=batch_size)
 total_steps = int(np.ceil(steps/len(trainloader)))*len(trainloader)
 device = 'cuda'
 
@@ -108,79 +108,45 @@ optimizer.zero_grad()
 epochs = int(np.ceil(total_steps/len(trainloader)))
 num_classes = 2
 
-def get_transformed_seq(image, seed=None):
-    device = images.device
+def make_transform_mtxs(nx, device, batch_size, n_tasks):
+    transform_mtxs = torch.empty((batch_size, nx, nx), device=device)
     gen = torch.Generator()
-    if seed == None:
-        seed = gen.initial_seed()
-    else:
+    for i in range(batch_size):
+        seed = np.random.randint(n_tasks)
         gen.manual_seed(seed)
 
-    nx = image.shape[-2] * image.shape[-1]
+        transform_mtxs[i, :, :] = torch.normal(0, 1/nx, size=(nx, nx), generator=gen)
 
-    transform_mtx = torch.normal(0, 1/nx, size=(nx, nx), generator=gen).to(device)
+    transform_mtxs.to(device)
 
-    # matmul will broadcast the transform_mtx to each image in the seq
-    transform_image = torch.matmul(image.view(-1, nx), transform_mtx).view(images.shape).to(device)
-
-    return transform_image, seed
-
+    return transform_mtxs
 
 for epoch in (pbar := tqdm(range(1, epochs + 1))):
     for images, labels in trainloader:
+        # skip last batch if it is not full
+        if images.shape[0] != batch_size:
+            continue
         model.train()
         # grab a batch of images and labels
-        # trasform each image in the batch individually as a separate task
-        for i in range(images.shape[0]):
-            images[i], seed = get_transformed_seq(images[i], seed=np.random.randint(n_tasks))
-            task_list.append(seed)
-        outputs = model(images)
+        images, labels = images.to(device), labels.to(device)
+        nx = images.shape[-2] * images.shape[-1]
+        transform_mtxs = make_transform_mtxs(nx, device, batch_size, n_tasks)
+
+        # Reshape images from (batch_size, 1, 16, 16) to (batch_size, 256)
+        flattened = rearrange(images, 'b c h w -> b (c h w)')
+
+        # Use einsum for the multiplication
+        # Pattern: 'b n, b n m -> b m'
+        # where b=batch, n=input dims (256), m=output dims (256)
+        transform_images = torch.einsum('bn,bnm->bm', flattened, transform_mtxs).view(images.shape).to(device)
+
+        outputs = model(transform_images)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
         losses.append(loss.item())
         pbar.set_description(f"epoch: {epoch}, loss: {loss.item():4f}")
-
-        # temp_images, temp_labels, task_list = dataset_utils.make_batch(images, labels, device, n_tasks, task_list, batch_size, num_classes)
-        # temp_images = temp_images.squeeze(1)
-        # outputs = model(temp_images)
-        # pred = outputs
-        # # train by predicting on all tokens, not just the last one
-        # labels = rearrange(temp_labels, 'b t -> (b t)')
-        # loss = criterion(pred, labels)
-        # loss.backward()
-        # optimizer.step()
-        # optimizer.zero_grad() 
-        # losses.append(loss.item())
-        # pbar.set_description(f"epoch: {epoch}, loss: {loss.item():4f}")
-
-        # # if first epoch, calc the test loss and acc at each step
-        # if epoch == 1:
-        #     model.eval()
-        #     with torch.no_grad():
-        #         testloss = 0
-        #         num_batch = len(testloader)
-        #         test_epochs = 1
-        #         accuracy = 0
-        #         for test_epoch in range(1, test_epochs + 1):
-        #             correct = 0
-        #             for images, labels in testloader:
-        #                 temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size, num_classes)
-        #                 temp_images = temp_images.squeeze(1)
-        #                 outputs = model(temp_images)
-        #                 pred = outputs
-        #                 temp_labels = rearrange(temp_labels, 'b t -> (b t)')
-        #                 batchloss = criterion(pred,temp_labels)
-        #                 _, predicted = torch.max(pred, 1)
-        #                 correct += (predicted == temp_labels).sum()
-        #                 testloss += batchloss.item()
-        #                 testbatchlosses.append(batchloss.item())
-        #             accuracy += 100 * (correct.item()) / (batch_size*num_batch)
-        #         accuracy /= test_epochs
-        #         accuracies.append(accuracy)
-        #         testloss /= (len(testloader) * test_epochs)
-        #         testlosses.append(testloss)
     # test the model
     model.eval()
     with torch.no_grad():
@@ -189,14 +155,24 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
         accuracy = 0
         correct = 0
         for images, labels in testloader:
-            temp_images, temp_labels, test_task_list = dataset_utils.make_unseen_batch(images, labels, device, n_tasks, test_task_list, batch_size, num_classes)
-            temp_images = temp_images.squeeze(1)
-            outputs = model(temp_images)
-            pred = outputs
-            temp_labels = rearrange(temp_labels, 'b t -> (b t)')
-            batchloss = criterion(pred,temp_labels)
-            _, predicted = torch.max(pred, 1)
-            correct += (predicted == temp_labels).sum()
+            # skip last batch if it is not full
+            if images.shape[0] != batch_size:
+                continue
+            images, labels = images.to(device), labels.to(device)
+            nx = images.shape[-2] * images.shape[-1]
+            transform_mtxs = make_transform_mtxs(nx, device, batch_size, n_tasks)
+            
+            # Reshape images from (batch_size, 1, 16, 16) to (batch_size, 256)
+            flattened = rearrange(images, 'b c h w -> b (c h w)')
+            # Use einsum for the multiplication
+            # Pattern: 'b n, b n m -> b m'
+            # where b=batch, n=input dims (256), m=output dims (256)
+            transform_images = torch.einsum('bn,bnm->bm', flattened, transform_mtxs).view(images.shape).to(device)
+
+            outputs = model(transform_images)
+            batchloss = criterion(outputs, labels)
+            _, predicted = torch.max(outputs, 1)
+            correct += (predicted == labels).sum()
             testloss += batchloss.item()
             testbatchlosses.append(batchloss.item())
         accuracy += 100 * (correct.item()) / (batch_size*num_batch)
@@ -215,3 +191,5 @@ testlosses = np.array(testlosses)
 np.save(f'{datadir}testlosses_{run_name}', testlosses)
 accuracies = np.array(accuracies)
 np.save(f'{datadir}accuracies_{run_name}', accuracies)
+
+plot_figs.plot_loss_acc(trainloader, losses, testlosses, accuracies, figdir, run_name)

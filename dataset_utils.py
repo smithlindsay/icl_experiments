@@ -356,7 +356,7 @@ def load_mnist_01(img_size, seq_len=100, shuffled=False):
     train_data.data = train_data.data[idx]
 
     trainloader = torch.utils.data.DataLoader(train_data, batch_size=seq_len, shuffle=True, 
-                                              num_workers=8, pin_memory=True)
+                                              num_workers=8, pin_memory=True, persistent_workers=True)
 
     # just test on 0s and 1s from mnist
     idx = (test_data.targets == 0) | (test_data.targets == 1)
