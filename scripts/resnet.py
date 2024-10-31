@@ -66,27 +66,26 @@ class Resnet(nn.Module):
         out = x
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layers(out)
-        #average over superpixels to create embedding
-        out = torch.mean(out,axis=(2,3))
-        out = self.final(F.relu(out))
+        out = F.avg_pool2d(out, out.size()[3])
+        out = out.view(out.size(0), -1)
+        out = self.final(out)
         return out
     
+img_size = 16
 task_exp = 16
 n_tasks = 2**task_exp # these will be the num of seeds we send into get_transformed_batch
 batch_size = 1000
 seq_len = 1 #this is what we previously called "batch_size"
-steps = 15000
+steps = 2500
 lr = 3e-4
 datadir = '/scratch/gpfs/ls1546/icl_experiments/data/'
 path = '/scratch/gpfs/ls1546/icl_experiments/'
 figdir = f'{path}figures/'
-momentum = 0.9
-img_size = 16
 
 d_model = 64    
 c_per_g = [16,32,32,d_model]
 resnet = Resnet(1, channels_per_group=c_per_g)
-# will output (batch_size, d_model)
+# will output (batch_size, num_classes=2)
 
 trainloader, testloader = dataset_utils.load_mnist_01(img_size, seq_len=batch_size)
 total_steps = int(np.ceil(steps/len(trainloader)))*len(trainloader)
@@ -96,7 +95,7 @@ model = resnet.to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 criterion = torch.nn.CrossEntropyLoss()
-lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50])
+# lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50])
 
 losses = []
 testlosses = []
@@ -129,18 +128,19 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
         model.train()
         # grab a batch of images and labels
         images, labels = images.to(device), labels.to(device)
-        nx = images.shape[-2] * images.shape[-1]
-        transform_mtxs = make_transform_mtxs(nx, device, batch_size, n_tasks)
+        # nx = images.shape[-2] * images.shape[-1]
+        # transform_mtxs = make_transform_mtxs(nx, device, batch_size, n_tasks)
 
-        # Reshape images from (batch_size, 1, 16, 16) to (batch_size, 256)
-        flattened = rearrange(images, 'b c h w -> b (c h w)')
+        # # Reshape images from (batch_size, 1, 16, 16) to (batch_size, 256)
+        # flattened = rearrange(images, 'b c h w -> b (c h w)')
 
-        # Use einsum for the multiplication
-        # Pattern: 'b n, b n m -> b m'
-        # where b=batch, n=input dims (256), m=output dims (256)
-        transform_images = torch.einsum('bn,bnm->bm', flattened, transform_mtxs).view(images.shape).to(device)
+        # # Use einsum for the multiplication
+        # # Pattern: 'b n, b n m -> b m'
+        # # where b=batch, n=input dims (256), m=output dims (256)
+        # transform_images = torch.einsum('bn,bnm->bm', flattened, transform_mtxs).view(images.shape).to(device)
 
-        outputs = model(transform_images)
+        # outputs = model(transform_images)
+        outputs = model(images)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -159,17 +159,18 @@ for epoch in (pbar := tqdm(range(1, epochs + 1))):
             if images.shape[0] != batch_size:
                 continue
             images, labels = images.to(device), labels.to(device)
-            nx = images.shape[-2] * images.shape[-1]
-            transform_mtxs = make_transform_mtxs(nx, device, batch_size, n_tasks)
+            # nx = images.shape[-2] * images.shape[-1]
+            # transform_mtxs = make_transform_mtxs(nx, device, batch_size, n_tasks)
             
-            # Reshape images from (batch_size, 1, 16, 16) to (batch_size, 256)
-            flattened = rearrange(images, 'b c h w -> b (c h w)')
-            # Use einsum for the multiplication
-            # Pattern: 'b n, b n m -> b m'
-            # where b=batch, n=input dims (256), m=output dims (256)
-            transform_images = torch.einsum('bn,bnm->bm', flattened, transform_mtxs).view(images.shape).to(device)
+            # # Reshape images from (batch_size, 1, 16, 16) to (batch_size, 256)
+            # flattened = rearrange(images, 'b c h w -> b (c h w)')
+            # # Use einsum for the multiplication
+            # # Pattern: 'b n, b n m -> b m'
+            # # where b=batch, n=input dims (256), m=output dims (256)
+            # transform_images = torch.einsum('bn,bnm->bm', flattened, transform_mtxs).view(images.shape).to(device)
 
-            outputs = model(transform_images)
+            # outputs = model(transform_images)
+            outputs = model(images)
             batchloss = criterion(outputs, labels)
             _, predicted = torch.max(outputs, 1)
             correct += (predicted == labels).sum()
